@@ -1,5 +1,13 @@
 # 任务管理器 · Android Task Manager
 
+<p>
+  <a href="https://github.com/Kalpa0448/TaskMgr/releases"><img src="https://img.shields.io/github/v/release/Kalpa0448/TaskMgr?color=4FC3F7" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Kalpa0448/TaskMgr?color=2E7D32" alt="License"></a>
+  <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white" alt="Android">
+  <img src="https://img.shields.io/badge/APK-118%20KB-9E9E9E" alt="APK size">
+  <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="No dependencies">
+</p>
+
 一个 Android 平台的系统监控工具，界面参考 Windows 11 任务管理器。
 **有 root 时功能完整，无 root 时也能看 CPU 频率推算、内存和设备信息。**
 

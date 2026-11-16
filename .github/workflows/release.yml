@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: |
+          sdkmanager --install "platforms;android-33" "build-tools;33.0.0"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # 可选：仓库配了签名 secrets 就用正式签名，否则回落到 debug 签名
+      - name: Configure signing (optional)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "使用仓库 Secrets 中的正式签名证书"
+            echo "$KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/release.jks"
+            cat > keystore.properties <<EOF
+          storeFile=$GITHUB_WORKSPACE/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          else
+            echo "未配置签名 secrets，使用 debug 签名（可直接安装，但不适合长期分发）"
+          fi
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Collect artifacts
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ -z "$VERSION" ] && VERSION="manual-${GITHUB_RUN_NUMBER}"
+          mkdir -p out
+          cp app/build/outputs/apk/release/app-release.apk "out/TaskMgr-${VERSION}.apk"
+          ls -lh out/
+
+      - name: Verify APK signature
+        run: |
+          BT="$ANDROID_SDK_ROOT/build-tools/33.0.0"
+          "$BT/apksigner" verify --print-certs out/*.apk | head -6
+          "$BT/aapt2" dump badging out/*.apk | head -1
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
