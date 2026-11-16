@@ -1,4 +1,4 @@
-package com.kalpa.taskmgr;
+package io.github.kalpa0448.taskmgr;
 
 import java.io.BufferedReader;
 import java.io.IOException;

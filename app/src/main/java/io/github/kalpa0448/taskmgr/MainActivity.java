@@ -1,4 +1,4 @@
-package com.kalpa.taskmgr;
+package io.github.kalpa0448.taskmgr;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -1003,14 +1003,28 @@ public class MainActivity extends Activity {
 
         sectionTitle("关于");
         TextView about = new TextView(this);
-        about.setText("Android 任务管理器\n"
+        about.setText("Android 任务管理器  v" + appVersion() + "\n"
                 + "监控 CPU / 内存 / 进程树；有 root 时功能完整，\n"
-                + "无 root 时 CPU 由 cpufreq 频率推算。");
+                + "无 root 时 CPU 由 cpufreq 频率推算。\n\n"
+                + "开源地址  https://github.com/Kalpa0448/TaskMgr\n"
+                + "本程序以 MIT 协议开源，欢迎提交 Issue 与 PR。\n"
+                + "© 2026 范特西 · MIT License");
+        // 让仓库链接可点击
+        about.setAutoLinkMask(android.text.util.Linkify.WEB_URLS);
+        about.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         about.setTextColor(C_SUB);
         about.setLineSpacing(dp(3), 1f);
         about.setPadding(dp(14), dp(8), dp(14), dp(8));
         settingsBox.addView(about, lp(-1, -2, 0, 0, 0, dp(10)));
+    }
+
+    private String appVersion() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     private void sectionTitle(String s) {

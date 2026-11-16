@@ -1,4 +1,4 @@
-package com.kalpa.taskmgr;
+package io.github.kalpa0448.taskmgr;
 
 import android.content.Context;
 import android.graphics.Canvas;

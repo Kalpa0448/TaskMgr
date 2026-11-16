@@ -91,7 +91,7 @@ Android 10+ 的 SELinux 策略禁止 `untrusted_app` 读取：
 
 ### 命令行
 ```bash
-git clone <this-repo>
+git clone https://github.com/Kalpa0448/TaskMgr
 cd <repo>
 echo "sdk.dir=$HOME/Android/Sdk" > local.properties
 ./gradlew assembleDebug
@@ -168,4 +168,4 @@ awk 'FNR==1{ split(FILENAME,p,"/"); pid=p[3]; ... }' /proc/[0-9]*/stat
 
 ## 许可
 
-未指定。若要开源建议选择 MIT 或 Apache-2.0，并保留本 README。
+[MIT](LICENSE) © 2026 范特西
