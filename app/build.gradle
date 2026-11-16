@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+}
+
+// 可选：在根目录放 keystore.properties 即可用正式签名，否则回落 debug 签名
+def keystorePropsFile = rootProject.file("keystore.properties")
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystoreProps.load(new FileInputStream(keystorePropsFile))
+}
+
+android {
+    compileSdkVersion 33
+    buildToolsVersion '33.0.0'
+
+    defaultConfig {
+        applicationId 'com.kalpa.taskmgr'
+        minSdkVersion 24
+        targetSdkVersion 33
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (keystoreProps.containsKey('storeFile')) {
+                storeFile file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig keystorePropsFile.exists()
+                    ? signingConfigs.release
+                    : signingConfigs.debug
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    // 无第三方依赖：UI 全部用系统控件 + 自绘
+}
