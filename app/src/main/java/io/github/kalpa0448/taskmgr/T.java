@@ -295,6 +295,8 @@ public final class T {
         put("更换图片", "Change image");
         put("删除背景", "Remove background");
         put("模糊强度", "Blur strength");
+        put("整页模糊", "Blur whole page");
+        put("开：整页背景都模糊；关：只有卡片区域模糊", "On: blur the whole page; Off: only card areas");
         put("图片背景", "Background image");
         put("先选择一张图片，以上选项才可调节。", "Choose an image first to unlock these options.");
         put("进程导出", "Process export");

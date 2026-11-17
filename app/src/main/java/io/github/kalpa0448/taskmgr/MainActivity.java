@@ -1321,7 +1321,19 @@ public class MainActivity extends Activity {
 
     private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
-        boolean frost = (bgBlurred != null);
+        boolean pageMode = sp.getBoolean("frostPage", false) && bgBlurred != null;
+        boolean frost = (bgBlurred != null) && !pageMode;
+        if (pageMode) {
+            BitmapDrawable bd2 = new BitmapDrawable(getResources(), bgBlurred);
+            bd2.setGravity(android.view.Gravity.FILL);
+            int sc2 = scrimColor();
+            Drawable bgp = sc2 == 0 ? bd2 : new LayerDrawable(new Drawable[]{bd2, new ColorDrawable(sc2)});
+            getWindow().setBackgroundDrawable(bgp);
+            for (FrostScrollView p : new FrostScrollView[]{pageMonitor, pageProcess, pageDetails, pageSettings}) {
+                if (p != null) { p.setFrostBackdrop(null); p.setBackgroundColor(0x00000000); }
+            }
+            return;
+        }
         if (frost) {
             for (FrostScrollView p : new FrostScrollView[]{pageMonitor, pageProcess, pageDetails, pageSettings}) {
                 if (p != null) p.setFrostBackdrop(bgBlurred);
@@ -1562,7 +1574,9 @@ public class MainActivity extends Activity {
         }
 
         sectionTitle(T.s("效果"));
-        switchRow(T.s("启用模糊"), T.s("仅对卡片区域做毛玻璃"), "bgBlur", true, null, on);
+        switchRow(T.s("启用模糊"), T.s("对背景做模糊处理"), "bgBlur", true, null, on);
+        switchRow(T.s("整页模糊"), T.s("开：整页背景都模糊；关：只有卡片区域模糊"),
+                "frostPage", false, null, on);
         inlineLevel(T.s("模糊强度"), "blurLevel", 5, on);
         inlineSlider(T.s("卡片不透明度"), "cardAlpha", 55, on);
         inlineSlider(T.s("背景暗度调节"), "scrim", 30, on);
