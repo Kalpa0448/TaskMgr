@@ -78,7 +78,8 @@ public class MainActivity extends Activity {
     private LinearLayout detailList;
     private String detailSort = "cpu";
     private String viewMode = "flat";   // flat=平铺（默认） / tree=树形
-    private String themeMode = "default"; // default / dark / light / monet
+    private String accentMode = "default"; // default=固定蓝 / monet=壁纸取色
+    private String darkMode   = "auto";    // auto=跟随系统 / light / dark
     private ScrollView rootScroll;
     private final Map<Integer, String> labelCache = new HashMap<>();
     private TextView tvCpu, tvCpuSub, tvMem, tvMemSub, tvSwap, tvProc, tvStatus, tvModeHint, tvTemp;
@@ -116,10 +117,17 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         sp = getSharedPreferences("tm", MODE_PRIVATE);
         // 旧版本用布尔值存主题，这里做一次迁移
-        if (!sp.contains("theme") && sp.contains("dark")) {
-            sp.edit().putString("theme", sp.getBoolean("dark", true) ? "dark" : "light").apply();
+        if (!sp.contains("accentMode")) {
+            String old = sp.getString("theme", sp.contains("dark")
+                    ? (sp.getBoolean("dark", true) ? "dark" : "light") : "default");
+            String acc = "default", dk = "auto";
+            if ("dark".equals(old)) dk = "dark";
+            else if ("light".equals(old)) dk = "light";
+            else if ("monet".equals(old)) acc = "monet";
+            sp.edit().putString("accentMode", acc).putString("darkMode", dk).apply();
         }
-        themeMode = sp.getString("theme", "default");
+        accentMode = sp.getString("accentMode", "default");
+        darkMode = sp.getString("darkMode", "auto");
         T.setEnglish("en".equals(sp.getString("lang", "zh")));
 
         boolean darkNow = isDarkMode();
@@ -160,11 +168,10 @@ public class MainActivity extends Activity {
     private boolean isDarkMode() {
         boolean sysDark = (getResources().getConfiguration().uiMode
                 & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        switch (themeMode) {
+        switch (darkMode) {
             case "dark": return true;
             case "light": return false;
-            case "monet": return sysDark;
-            default: return sysDark;   // default：跟随系统
+            default: return sysDark;
         }
     }
 
@@ -197,7 +204,7 @@ public class MainActivity extends Activity {
         boolean dark = isDarkMode();
 
         int accent = 0;
-        if ("monet".equals(themeMode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if ("monet".equals(accentMode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             accent = monetAccent(dark);
         }
         boolean monet = accent != 0;
@@ -1001,21 +1008,29 @@ public class MainActivity extends Activity {
         settingsBox.removeAllViews();
 
         sectionTitle(T.s("外观"));
-        settingRow(T.s("主题"), themeLabel(), () -> {
-            String[] keys = {"default", "dark", "light", "monet"};
-            String[] labels = {T.s("默认"), T.s("深色"), T.s("浅色"), T.s("莫奈取色")};
-            int cur = 0;
-            for (int i = 0; i < keys.length; i++) if (keys[i].equals(themeMode)) cur = i;
-            if (Build.VERSION.SDK_INT < 31) {
-                labels[3] = T.s("莫奈取色（需 Android 12+）");
-            }
-            choose(T.s("主题"), labels, cur, i -> {
-                if (i == 3 && Build.VERSION.SDK_INT < 31) {
+        settingRow(T.s("配色"), accentLabel(), () -> {
+            String[] keys = {"default", "monet"};
+            String[] labels = {T.s("默认"), Build.VERSION.SDK_INT >= 31
+                    ? T.s("莫奈取色") : T.s("莫奈取色（需 Android 12+）")};
+            choose(T.s("配色"), labels, "monet".equals(accentMode) ? 1 : 0, i2 -> {
+                if (i2 == 1 && Build.VERSION.SDK_INT < 31) {
                     toast(T.s("莫奈取色需要 Android 12 及以上"));
                     return;
                 }
-                themeMode = keys[i];
-                sp.edit().putString("theme", themeMode).apply();
+                accentMode = keys[i2];
+                sp.edit().putString("accentMode", accentMode).apply();
+                recreate();
+            });
+        });
+
+        settingRow(T.s("明暗"), darkLabel(), () -> {
+            String[] keys = {"auto", "light", "dark"};
+            String[] labels = {T.s("跟随系统"), T.s("浅色"), T.s("深色")};
+            int cur = 0;
+            for (int k = 0; k < keys.length; k++) if (keys[k].equals(darkMode)) cur = k;
+            choose(T.s("明暗"), labels, cur, i2 -> {
+                darkMode = keys[i2];
+                sp.edit().putString("darkMode", darkMode).apply();
                 recreate();
             });
         });
@@ -1032,6 +1047,13 @@ public class MainActivity extends Activity {
                 }
             });
         });
+
+        if (sp.getString("bgUri", null) != null) {
+            settingRow(T.s("恢复默认背景"), "", () -> {
+                sp.edit().remove("bgUri").apply();
+                recreate();
+            });
+        }
 
         settingRow(T.s("卡片模糊"), sp.getBoolean("bgBlur", true) ? T.s("开") : T.s("关"), () -> {
             boolean v = !sp.getBoolean("bgBlur", true);
@@ -1132,12 +1154,15 @@ public class MainActivity extends Activity {
         settingRow(T.s("关于"), "v" + appVersion(), this::showAbout);
     }
 
-    private String themeLabel() {
-        switch (themeMode) {
+    private String accentLabel() {
+        return "monet".equals(accentMode) ? T.s("莫奈取色") : T.s("默认");
+    }
+
+    private String darkLabel() {
+        switch (darkMode) {
             case "dark": return T.s("深色");
             case "light": return T.s("浅色");
-            case "monet": return T.s("莫奈取色");
-            default: return T.s("默认");
+            default: return T.s("跟随系统");
         }
     }
 
@@ -1194,14 +1219,19 @@ public class MainActivity extends Activity {
         Bitmap bm = null;
         if (uriStr != null) {
             bm = loadBg(Uri.parse(uriStr));
-            if (bm != null && sp.getBoolean("bgBlur", true)) bm = blur(bm);
+            if (bm != null) {
+                bm = fitToScreen(bm);
+                if (sp.getBoolean("bgBlur", true)) bm = blur(bm);
+            }
         }
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
         if (bm == null) {
             getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
             for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
         } else {
-            getWindow().setBackgroundDrawable(new BitmapDrawable(getResources(), bm));
+            BitmapDrawable bd = new BitmapDrawable(getResources(), bm);
+            bd.setGravity(android.view.Gravity.FILL);
+            getWindow().setBackgroundDrawable(bd);
             for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
         }
     }
@@ -1225,18 +1255,86 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 缩放在放大 = 廉价高斯模糊，所有 API 都能用 */
+    /** 按屏幕比例居中裁切，保证背景铺满且不变形 */
+    private Bitmap fitToScreen(Bitmap src) {
+        try {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            int sw = dm.widthPixels, sh = dm.heightPixels;
+            float scale = Math.max((float) sw / src.getWidth(), (float) sh / src.getHeight());
+            int w = Math.max(sw, Math.round(src.getWidth() * scale));
+            int h = Math.max(sh, Math.round(src.getHeight() * scale));
+            Bitmap scaled = Bitmap.createScaledBitmap(src, w, h, true);
+            int x = Math.max(0, (w - sw) / 2);
+            int y = Math.max(0, (h - sh) / 2);
+            Bitmap cut = Bitmap.createBitmap(scaled, x, y, Math.min(sw, w), Math.min(sh, h));
+            if (scaled != src && scaled != cut) scaled.recycle();
+            return cut;
+        } catch (Throwable t) {
+            return src;
+        }
+    }
+
+    /** 先缩小到 1/16，再做 3 次 box blur，最后放大 —— 接近毛玻璃效果 */
     private Bitmap blur(Bitmap src) {
         try {
-            int w = Math.max(1, src.getWidth() / 32);
-            int h = Math.max(1, src.getHeight() / 32);
+            int w = Math.max(12, src.getWidth() / 16);
+            int h = Math.max(12, src.getHeight() / 16);
             Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
-            Bitmap out = Bitmap.createScaledBitmap(small, src.getWidth(), src.getHeight(), true);
-            if (out != small) small.recycle();
+            int[] px = new int[w * h];
+            small.getPixels(px, 0, w, 0, 0, w, h);
+            for (int pass = 0; pass < 3; pass++) px = boxBlur(px, w, h, 3);
+            Bitmap mid = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            mid.setPixels(px, 0, w, 0, 0, w, h);
+            Bitmap out = Bitmap.createScaledBitmap(mid, src.getWidth(), src.getHeight(), true);
+            if (small != src) small.recycle();
+            mid.recycle();
             return out;
         } catch (Throwable t) {
             return src;
         }
+    }
+
+    /** 可分离 box blur（水平一趟 + 垂直一趟） */
+    private static int[] boxBlur(int[] src, int w, int h, int r) {
+        int[] tmp = new int[src.length];
+        int[] out = new int[src.length];
+        int n = 2 * r + 1;
+
+        for (int y = 0; y < h; y++) {
+            int base = y * w;
+            for (int x = 0; x < w; x++) {
+                int a = 0, rr = 0, gg = 0, bb = 0;
+                for (int k = -r; k <= r; k++) {
+                    int xx = x + k;
+                    if (xx < 0) xx = 0;
+                    if (xx >= w) xx = w - 1;
+                    int c = src[base + xx];
+                    a += c >>> 24;
+                    rr += (c >> 16) & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += c & 0xFF;
+                }
+                tmp[base + x] = ((a / n) << 24) | ((rr / n) << 16) | ((gg / n) << 8) | (bb / n);
+            }
+        }
+
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int a = 0, rr = 0, gg = 0, bb = 0;
+                for (int k = -r; k <= r; k++) {
+                    int yy = y + k;
+                    if (yy < 0) yy = 0;
+                    if (yy >= h) yy = h - 1;
+                    int c = tmp[yy * w + x];
+                    a += c >>> 24;
+                    rr += (c >> 16) & 0xFF;
+                    gg += (c >> 8) & 0xFF;
+                    bb += c & 0xFF;
+                }
+                out[y * w + x] = ((a / n) << 24) | ((rr / n) << 16) | ((gg / n) << 8) | (bb / n);
+            }
+        }
+        return out;
     }
 
     /* ================= 导出 Excel ================= */
@@ -1332,7 +1430,14 @@ public class MainActivity extends Activity {
         tv.setText(s);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        tv.setTextColor(C_SUB);
+        if (sp.getString("bgUri", null) != null) {
+            // 有背景图时提高对比度，否则分组标题会糊在背景里
+            boolean dark = isDarkMode();
+            tv.setTextColor(C_TEXT);
+            tv.setShadowLayer(3f, 0f, 1f, dark ? 0xB3000000 : 0x66FFFFFF);
+        } else {
+            tv.setTextColor(C_SUB);
+        }
         tv.setPadding(dp(6), dp(14), dp(6), dp(6));
         settingsBox.addView(tv);
     }
