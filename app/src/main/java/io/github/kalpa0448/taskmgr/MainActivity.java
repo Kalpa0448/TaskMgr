@@ -1567,6 +1567,8 @@ public class MainActivity extends Activity {
         sectionTitle(T.s("效果"));
         switchRow(T.s("启用模糊"), T.s("仅对卡片区域做毛玻璃"), "bgBlur", true, null, on);
         inlineLevel(T.s("模糊强度"), "blurLevel", 5, on);
+        inlineSlider(T.s("卡片不透明度"), "cardAlpha", 55, on);
+        inlineSlider(T.s("背景暗度调节"), "scrim", 30, on);
         switchRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null, on);
         switchRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null, on);
 
