@@ -541,20 +541,34 @@ public final class ProcCollector {
     public static void fillIo(Snapshot s) {
         try {
             long readSec = 0, writeSec = 0;
-            for (String line : readAll("/proc/diskstats")) {
+            java.util.List<String> dlines;
+            if (hasRoot()) {
+                String out = su("cat /proc/diskstats");
+                dlines = new java.util.ArrayList<>();
+                for (String l : out.split("\n")) dlines.add(l);
+            } else {
+                dlines = readAll("/proc/diskstats");
+            }
+            for (String line : dlines) {
                 String[] f = line.trim().split("\\s+");
                 if (f.length < 10) continue;
                 String dev = f[2];
                 // 只统计主存储设备，避免分区重复计数
-                if (!(dev.equals("sda") || dev.equals("sdb") || dev.equals("mmcblk0")
-                        || dev.equals("vda") || dev.equals("nvme0n1"))) continue;
+                if (!dev.matches("(sd[a-z]+|vd[a-z]+|mmcblk\\d+|nvme\\d+n\\d+)")) continue;
                 try {
                     readSec += Long.parseLong(f[5]);
                     writeSec += Long.parseLong(f[9]);
                 } catch (NumberFormatException ignored) { }
             }
             long rx = 0, tx = 0;
-            for (String line : readAll("/proc/net/dev")) {
+            // 优先用官方 API：Android 10+ 已限制应用读 /proc/net/dev
+            try {
+                long r = android.net.TrafficStats.getTotalRxBytes();
+                long t = android.net.TrafficStats.getTotalTxBytes();
+                if (r > 0 || t > 0) { rx = r; tx = t; }
+            } catch (Throwable ignored) { }
+
+            if (rx == 0 && tx == 0) for (String line : readAll("/proc/net/dev")) {
                 int i = line.indexOf(':');
                 if (i < 0) continue;
                 String name = line.substring(0, i).trim();
@@ -567,7 +581,9 @@ public final class ProcCollector {
                 } catch (NumberFormatException ignored) { }
             }
             long now = System.currentTimeMillis();
-            if (ioLastT > 0 && now > ioLastT) {
+            if (readSec == 0 && writeSec == 0) {
+                s.diskReadBps = -1; s.diskWriteBps = -1;
+            } else if (ioLastT > 0 && now > ioLastT) {
                 double dt = (now - ioLastT) / 1000.0;
                 s.diskReadBps = Math.max(0, (readSec - ioLastRead) * 512.0 / dt);
                 s.diskWriteBps = Math.max(0, (writeSec - ioLastWrite) * 512.0 / dt);
