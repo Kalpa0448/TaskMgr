@@ -100,7 +100,6 @@ public class FrostScrollView extends ScrollView {
             if (tag instanceof Float && v.getWidth() > 0 && v.getHeight() > 0) {
                 node.set(0, 0, v.getWidth(), v.getHeight());
                 host.offsetDescendantRectToMyCoords(v, node);
-                node.offset(0, host.getScrollY());   // 背景画布带滚动偏移，这里补回来
                 if (node.bottom > 0 && node.top < host.getHeight()
                         && node.right > 0 && node.left < host.getWidth()) {
                     rect.set(node);
