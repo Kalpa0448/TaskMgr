@@ -9,7 +9,15 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.ContentValues;
 import android.content.pm.ApplicationInfo;
+import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.ColorDrawable;
+import android.net.Uri;
+import android.provider.MediaStore;
 import android.content.pm.PackageInfo;
 import android.os.BatteryManager;
 import android.os.Environment;
@@ -34,6 +42,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -68,6 +78,8 @@ public class MainActivity extends Activity {
     private LinearLayout detailList;
     private String detailSort = "cpu";
     private String viewMode = "flat";   // flat=平铺（默认） / tree=树形
+    private String themeMode = "default"; // default / dark / light / monet
+    private ScrollView rootScroll;
     private final Map<Integer, String> labelCache = new HashMap<>();
     private TextView tvCpu, tvCpuSub, tvMem, tvMemSub, tvSwap, tvProc, tvStatus, tvModeHint, tvTemp;
     private View barCpu, barMem;
@@ -103,11 +115,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sp = getSharedPreferences("tm", MODE_PRIVATE);
-        boolean dark = sp.getBoolean("dark", true);
-        // 让系统对话框（含详情弹窗）也跟随应用主题，避免深色界面弹出白框
-        setTheme(dark ? android.R.style.Theme_DeviceDefault_NoActionBar
+        // 旧版本用布尔值存主题，这里做一次迁移
+        if (!sp.contains("theme") && sp.contains("dark")) {
+            sp.edit().putString("theme", sp.getBoolean("dark", true) ? "dark" : "light").apply();
+        }
+        themeMode = sp.getString("theme", "default");
+        T.setEnglish("en".equals(sp.getString("lang", "zh")));
+
+        boolean darkNow = isDarkMode();
+        // 让系统对话框（含详情弹窗）跟随应用主题
+        setTheme(darkNow ? android.R.style.Theme_DeviceDefault_NoActionBar
                 : android.R.style.Theme_DeviceDefault_Light_NoActionBar);
-        applyTheme(dark);
+        applyTheme();
         sortBy = sp.getString("sort", "cpu");
         filterMode = sp.getString("filter", "all");
         cpuMode = sp.getString("cpuMode", "agg");
@@ -121,7 +140,7 @@ public class MainActivity extends Activity {
             final boolean r = ProcCollector.hasRoot();
             ui.post(() -> {
                 rootOk = r;
-                tvStatus.setText(r ? "● root 已授权（完整模式）" : "● 无 root（受限模式）");
+                tvStatus.setText(r ? T.s("● root 已授权（完整模式）") : T.s("● 无 root（受限模式）"));
                 tvStatus.setTextColor(r ? C_MEM : C_WARN);
                 new Thread(() -> {
                 }, "noop").start();
@@ -138,27 +157,91 @@ public class MainActivity extends Activity {
 
     /* ================= 主题 ================= */
 
-    private void applyTheme(boolean dark) {
-        if (dark) {
-            C_BG = 0xFF1B1B1D; C_CARD = 0xFF262629; C_CARD2 = 0xFF212124;
-            C_TEXT = 0xFFECECEC; C_SUB = 0xFF9A9A9A; C_TRACK = 0xFF3A3A3D;
-            C_CPU = 0xFF4FC3F7; C_MEM = 0xFF81C784; C_WARN = 0xFFEF5350; C_SWAP = 0xFFFFB74D;
-            C_CHIP = 0xFF40404A;        // 未选中 chip：明显亮于卡片
-            C_DANGER_BG = 0xFF43262A;
-        } else {
-            C_BG = 0xFFF4F4F7; C_CARD = 0xFFFFFFFF; C_CARD2 = 0xFFF0F0F4;
-            C_TEXT = 0xFF1A1A1A; C_SUB = 0xFF6B6B6B; C_TRACK = 0xFFE2E2E8;
-            C_CPU = 0xFF0288D1; C_MEM = 0xFF2E7D32; C_WARN = 0xFFC62828; C_SWAP = 0xFFEF6C00;
-            C_CHIP = 0xFFDCDCE6;        // 浅色下未选中 chip（对比度更高）
-            C_DANGER_BG = 0xFFFBE4E4;
+    private boolean isDarkMode() {
+        boolean sysDark = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        switch (themeMode) {
+            case "dark": return true;
+            case "light": return false;
+            case "monet": return sysDark;
+            default: return sysDark;   // default：跟随系统
         }
+    }
+
+    /** Monet（Material You）取色，Android 12+ */
+    private int monetAccent(boolean dark) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return 0;
+        int res = dark ? android.R.color.system_accent1_200 : android.R.color.system_accent1_600;
         try {
-            boolean isDark = (C_BG & 0xFFFFFF) < 0x808080;
+            int c = getResources().getColor(res, getTheme());
+            return (c == 0xFF000000 || c == 0xFFFFFFFF) ? 0 : c;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    static int blend(int a, int b, float r) {
+        int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        return 0xFF000000
+                | (Math.round(ar + (br - ar) * r) << 16)
+                | (Math.round(ag + (bg - ag) * r) << 8)
+                | Math.round(ab + (bb - ab) * r);
+    }
+
+    static int withAlpha(int color, int a) {
+        return (color & 0x00FFFFFF) | (a << 24);
+    }
+
+    private void applyTheme() {
+        boolean dark = isDarkMode();
+
+        int accent = 0;
+        if ("monet".equals(themeMode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            accent = monetAccent(dark);
+        }
+        boolean monet = accent != 0;
+        if (!monet) accent = dark ? 0xFF4FC3F7 : 0xFF0288D1;
+
+        int baseBg    = dark ? 0xFF1B1B1D : 0xFFF4F4F7;
+        int baseCard  = dark ? 0xFF262629 : 0xFFFFFFFF;
+        int baseCard2 = dark ? 0xFF212124 : 0xFFF0F0F4;
+        int baseChip  = dark ? 0xFF40404A : 0xFFDCDCE6;
+        int baseTrack = dark ? 0xFF3A3A3D : 0xFFE2E2E8;
+
+        if (monet) {
+            C_BG    = blend(baseBg, accent, 0.10f);
+            C_CARD  = blend(baseCard, accent, 0.06f);
+            C_CARD2 = blend(baseCard2, accent, 0.08f);
+            C_CHIP  = blend(baseChip, accent, 0.16f);
+            C_TRACK = blend(baseTrack, accent, 0.14f);
+            C_SUB   = blend(dark ? 0xFF9A9A9A : 0xFF6B6B6B, accent, 0.25f);
+        } else {
+            C_BG = baseBg; C_CARD = baseCard; C_CARD2 = baseCard2;
+            C_CHIP = baseChip; C_TRACK = baseTrack;
+            C_SUB = dark ? 0xFF9A9A9A : 0xFF6B6B6B;
+        }
+
+        C_TEXT = dark ? 0xFFECECEC : 0xFF1A1A1A;
+        C_CPU = accent;
+        C_MEM = dark ? 0xFF81C784 : 0xFF2E7D32;
+        C_WARN = dark ? 0xFFEF5350 : 0xFFC62828;
+        C_SWAP = dark ? 0xFFFFB74D : 0xFFEF6C00;
+        C_DANGER_BG = dark ? 0xFF43262A : 0xFFFBE4E4;
+
+        // 设了自定义背景图 → 卡片半透明，露出模糊背景
+        if (sp.getString("bgUri", null) != null) {
+            C_CARD = withAlpha(C_CARD, 0xE2);
+            C_CARD2 = withAlpha(C_CARD2, 0xCF);
+            C_CHIP = withAlpha(C_CHIP, 0xE2);
+        }
+
+        try {
             getWindow().setStatusBarColor(C_BG);
             getWindow().setNavigationBarColor(C_BG);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 int f = getWindow().getDecorView().getSystemUiVisibility();
-                if (isDark) f &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (dark) f &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                 else f |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
                 getWindow().getDecorView().setSystemUiVisibility(f);
             }
@@ -170,19 +253,19 @@ public class MainActivity extends Activity {
     private View build() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(C_BG);
+        root.setBackgroundColor(0x00000000);
         root.setPadding(dp(14), dp(14), dp(14), 0);
 
         // 标题
         TextView t = new TextView(this);
-        t.setText("任务管理器");
+        t.setText(T.s("任务管理器"));
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
         t.setTypeface(Typeface.DEFAULT_BOLD);
         t.setTextColor(C_TEXT);
         root.addView(t);
 
         tvStatus = new TextView(this);
-        tvStatus.setText("正在请求 root…");
+        tvStatus.setText(T.s("正在请求 root…"));
         tvStatus.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tvStatus.setTextColor(C_SUB);
         tvStatus.setPadding(0, dp(4), 0, dp(10));
@@ -192,10 +275,10 @@ public class MainActivity extends Activity {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         tabs.setPadding(0, 0, 0, dp(8));
-        tabMonitor = tabBtn("监控");
-        tabProcess = tabBtn("进程");
-        tabDetails = tabBtn("详情");
-        tabSettings = tabBtn("设置");
+        tabMonitor = tabBtn(T.s("概览"));
+        tabProcess = tabBtn(T.s("进程"));
+        tabDetails = tabBtn(T.s("详情"));
+        tabSettings = tabBtn(T.s("设置"));
         tabMonitor.setOnClickListener(v -> switchTab("monitor"));
         tabProcess.setOnClickListener(v -> switchTab("process"));
         tabDetails.setOnClickListener(v -> switchTab("details"));
@@ -219,6 +302,7 @@ public class MainActivity extends Activity {
         content.addView(pageDetails, new LinearLayout.LayoutParams(-1, -1));
         content.addView(pageSettings, new LinearLayout.LayoutParams(-1, -1));
         syncChips();          // 启动时必须调一次，否则所有 chip 没有背景色
+        applyBackground();
         switchTab(tab);
         return root;
     }
@@ -281,7 +365,7 @@ public class MainActivity extends Activity {
         tvCpu.setTypeface(Typeface.DEFAULT_BOLD);
         tvCpu.setTextColor(C_CPU);
         r1.addView(tvCpu, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView cpuDetail = pill("详情", C_CPU, C_CHIP);
+        TextView cpuDetail = pill(T.s("详情"), C_CPU, C_CHIP);
         cpuDetail.setOnClickListener(v -> showCpuDetail());
         r1.addView(cpuDetail);
         cpuCard.addView(r1);
@@ -297,8 +381,8 @@ public class MainActivity extends Activity {
         cpuCard.addView(trackCpu, lp(-1, dp(6), 0, dp(10), 0, 0));
 
         LinearLayout modeRow = new LinearLayout(this);
-        chipAgg = chip("合并曲线");
-        chipPer = chip("分核心");
+        chipAgg = chip(T.s("合并曲线"));
+        chipPer = chip(T.s("分核心"));
         chipAgg.setOnClickListener(v -> { cpuMode = "agg"; sp.edit().putString("cpuMode", "agg").apply(); syncChips(); applyCpuMode(); });
         chipPer.setOnClickListener(v -> { cpuMode = "per"; sp.edit().putString("cpuMode", "per").apply(); syncChips(); applyCpuMode(); });
         modeRow.addView(chipAgg);
@@ -321,7 +405,7 @@ public class MainActivity extends Activity {
         cpuCard.addView(tvCpuSub);
 
         tvTemp = new TextView(this);
-        tvTemp.setText("温度 —");
+        tvTemp.setText(T.s("温度 —"));
         tvTemp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         tvTemp.setTextColor(C_SUB);
         tvTemp.setPadding(0, dp(3), 0, 0);
@@ -338,7 +422,7 @@ public class MainActivity extends Activity {
         tvMem.setTypeface(Typeface.DEFAULT_BOLD);
         tvMem.setTextColor(C_MEM);
         r2.addView(tvMem, new LinearLayout.LayoutParams(0, -2, 1f));
-        TextView memDetail = pill("详情", C_MEM, C_CHIP);
+        TextView memDetail = pill(T.s("详情"), C_MEM, C_CHIP);
         memDetail.setOnClickListener(v -> showMemDetail());
         r2.addView(memDetail);
         memCard.addView(r2);
@@ -374,14 +458,14 @@ public class MainActivity extends Activity {
     private LinearLayout buildDeviceCard() {
         LinearLayout c = card();
         TextView title = new TextView(this);
-        title.setText("设备信息");
+        title.setText(T.s("设备信息"));
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextColor(C_SUB);
         title.setPadding(0, 0, 0, dp(8));
         c.addView(title);
 
-        String[] keys = {"型号", "Android", "内核", "开机时长", "软件包", "存储", "IP 地址", "电池"};
+        String[] keys = {T.s("型号"), "Android", T.s("内核"), T.s("开机时长"), T.s("软件包"), T.s("存储"), T.s("IP 地址"), T.s("电池")};
         for (int i = 0; i < keys.length; i++) {
             if (i > 0) {
                 View line = new View(this);
@@ -414,18 +498,18 @@ public class MainActivity extends Activity {
 
     private void updateDeviceInfo() {
         ProcCollector.Snapshot s = last;
-        set("型号", Build.MANUFACTURER + " " + Build.MODEL + "  (" + Build.DEVICE + ")");
+        set(T.s("型号"), Build.MANUFACTURER + " " + Build.MODEL + "  (" + Build.DEVICE + ")");
         set("Android", "Android " + Build.VERSION.RELEASE + " · API " + Build.VERSION.SDK_INT
                 + (Build.VERSION.SECURITY_PATCH != null && !Build.VERSION.SECURITY_PATCH.isEmpty()
-                ? " · 补丁 " + Build.VERSION.SECURITY_PATCH : ""));
-        set("内核", System.getProperty("os.version", "?") + " · " + Build.HARDWARE);
-        set("开机时长", s != null && s.uptime > 0
+                ? T.s(" · 补丁 ") + Build.VERSION.SECURITY_PATCH : ""));
+        set(T.s("内核"), System.getProperty("os.version", "?") + " · " + Build.HARDWARE);
+        set(T.s("开机时长"), s != null && s.uptime > 0
                 ? fmtDuration((long) s.uptime)
                 : fmtDuration(SystemClock.elapsedRealtime() / 1000));
-        set("软件包", packages());
-        set("存储", storage());
-        set("IP 地址", ipAddress());
-        set("电池", battery());
+        set(T.s("软件包"), packages());
+        set(T.s("存储"), storage());
+        set(T.s("IP 地址"), ipAddress());
+        set(T.s("电池"), battery());
     }
 
     private void set(String k, String v) {
@@ -448,9 +532,9 @@ public class MainActivity extends Activity {
                 else if (isSys) sys++;
                 else user++;
             }
-            pkgCache = String.format(Locale.ROOT, "系统 %d · 用户 %d · 共 %d", sys, user, sys + user);
+            pkgCache = String.format(Locale.ROOT, T.s("系统 %d · 用户 %d · 共 %d"), sys, user, sys + user);
         } catch (Throwable t) {
-            pkgCache = "读取失败（缺少包可见性权限）";
+            pkgCache = T.s("读取失败（缺少包可见性权限）");
         }
         pkgCacheAt = now;
         return pkgCache;
@@ -461,10 +545,10 @@ public class MainActivity extends Activity {
             StatFs f = new StatFs(Environment.getDataDirectory().getAbsolutePath());
             long total = f.getTotalBytes(), free = f.getAvailableBytes();
             long used = total - free;
-            return String.format(Locale.ROOT, "%.1f / %.1f GB（可用 %.1f GB）",
+            return String.format(Locale.ROOT, T.s("%.1f / %.1f GB（可用 %.1f GB）"),
                     used / 1073741824.0, total / 1073741824.0, free / 1073741824.0);
         } catch (Throwable t) {
-            return "读取失败";
+            return T.s("读取失败");
         }
     }
 
@@ -503,17 +587,17 @@ public class MainActivity extends Activity {
                     if (fallback == null) fallback = name + " " + ip;
                 }
             }
-            return fallback == null ? "未连接网络" : fallback;
+            return fallback == null ? T.s("未连接网络") : fallback;
         } catch (Throwable t) {
             android.util.Log.d("TaskMgr", "ip via NI failed: " + t);
-            return "未连接 / 读取失败";
+            return T.s("未连接 / 读取失败");
         }
     }
 
     private String battery() {
         try {
             Intent i = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-            if (i == null) return "读取失败";
+            if (i == null) return T.s("读取失败");
             int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
             int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
             int pct = scale > 0 ? level * 100 / scale : -1;
@@ -524,11 +608,11 @@ public class MainActivity extends Activity {
 
             String st;
             switch (status) {
-                case BatteryManager.BATTERY_STATUS_CHARGING: st = "充电中"; break;
-                case BatteryManager.BATTERY_STATUS_FULL: st = "已充满"; break;
-                case BatteryManager.BATTERY_STATUS_DISCHARGING: st = "放电中"; break;
-                case BatteryManager.BATTERY_STATUS_NOT_CHARGING: st = "未充电"; break;
-                default: st = "未知";
+                case BatteryManager.BATTERY_STATUS_CHARGING: st = T.s("充电中"); break;
+                case BatteryManager.BATTERY_STATUS_FULL: st = T.s("已充满"); break;
+                case BatteryManager.BATTERY_STATUS_DISCHARGING: st = T.s("放电中"); break;
+                case BatteryManager.BATTERY_STATUS_NOT_CHARGING: st = T.s("未充电"); break;
+                default: st = T.s("未知");
             }
 
             StringBuilder sb = new StringBuilder();
@@ -553,7 +637,7 @@ public class MainActivity extends Activity {
             }
             return sb.toString();
         } catch (Throwable t) {
-            return "读取失败";
+            return T.s("读取失败");
         }
     }
 
@@ -576,7 +660,7 @@ public class MainActivity extends Activity {
             coreBox.removeAllViews();
             cores.clear();
             TextView hint = new TextView(this);
-            hint.setText("无法读取每核数据（需要 root 或该机型不暴露 cpufreq）");
+            hint.setText(T.s("无法读取每核数据（需要 root 或该机型不暴露 cpufreq）"));
             hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             hint.setTextColor(C_SUB);
             hint.setPadding(0, dp(8), 0, dp(8));
@@ -649,7 +733,7 @@ public class MainActivity extends Activity {
 
         LinearLayout filters = new LinearLayout(this);
         filters.setOrientation(LinearLayout.HORIZONTAL);
-        chipAll = chip("全部"); chipSys = chip("系统"); chipApp = chip("用户");
+        chipAll = chip(T.s("全部")); chipSys = chip(T.s("系统")); chipApp = chip(T.s("用户"));
         chipAll.setOnClickListener(v -> { filterMode = "all"; sp.edit().putString("filter", "all").apply(); syncChips(); render(last); });
         chipSys.setOnClickListener(v -> { filterMode = "system"; sp.edit().putString("filter", "system").apply(); syncChips(); render(last); });
         chipApp.setOnClickListener(v -> { filterMode = "app"; sp.edit().putString("filter", "app").apply(); syncChips(); render(last); });
@@ -659,18 +743,18 @@ public class MainActivity extends Activity {
         LinearLayout sorts = new LinearLayout(this);
         sorts.setOrientation(LinearLayout.HORIZONTAL);
         sorts.setGravity(Gravity.CENTER_VERTICAL);
-        chipCpu = chip("CPU↓"); chipMem = chip("内存↓"); chipName = chip("名称");
+        chipCpu = chip("CPU↓"); chipMem = chip(T.s("内存↓")); chipName = chip(T.s("名称"));
         chipCpu.setOnClickListener(v -> { sortBy = "cpu"; sp.edit().putString("sort", "cpu").apply(); syncChips(); render(last); });
         chipMem.setOnClickListener(v -> { sortBy = "mem"; sp.edit().putString("sort", "mem").apply(); syncChips(); render(last); });
         chipName.setOnClickListener(v -> { sortBy = "name"; sp.edit().putString("sort", "name").apply(); syncChips(); render(last); });
         sorts.addView(chipCpu); sorts.addView(chipMem); sorts.addView(chipName);
-        chipFlat = chip("平铺");
-        chipTree = chip("树形");
+        chipFlat = chip(T.s("平铺"));
+        chipTree = chip(T.s("树形"));
         chipFlat.setOnClickListener(v -> setViewMode("flat"));
         chipTree.setOnClickListener(v -> setViewMode("tree"));
         sorts.addView(chipFlat); sorts.addView(chipTree);
         tvProc = new TextView(this);
-        tvProc.setText("进程");
+        tvProc.setText(T.s("进程"));
         tvProc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tvProc.setTextColor(C_SUB);
         tvProc.setGravity(Gravity.END);
@@ -678,7 +762,7 @@ public class MainActivity extends Activity {
         box.addView(sorts, lp(-1, -2, 0, 0, 0, dp(8)));
 
         search = new EditText(this);
-        search.setHint("搜索进程名 / PID");
+        search.setHint(T.s("搜索进程名 / PID"));
         search.setHintTextColor(C_SUB);
         search.setTextColor(C_TEXT);
         search.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -717,9 +801,9 @@ public class MainActivity extends Activity {
 
         LinearLayout dFilters = new LinearLayout(this);
         dFilters.setOrientation(LinearLayout.HORIZONTAL);
-        dChipAll = chip("全部");
-        dChipSys = chip("系统");
-        dChipApp = chip("用户");
+        dChipAll = chip(T.s("全部"));
+        dChipSys = chip(T.s("系统"));
+        dChipApp = chip(T.s("用户"));
         dChipAll.setOnClickListener(v -> setFilter("all"));
         dChipSys.setOnClickListener(v -> setFilter("system"));
         dChipApp.setOnClickListener(v -> setFilter("app"));
@@ -729,7 +813,7 @@ public class MainActivity extends Activity {
         box.addView(dFilters, lp(-1, -2, 0, 0, 0, dp(8)));
 
         EditText et = new EditText(this);
-        et.setHint("搜索名称 / PID");
+        et.setHint(T.s("搜索名称 / PID"));
         et.setHintTextColor(C_SUB);
         et.setTextColor(C_TEXT);
         et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -779,14 +863,14 @@ public class MainActivity extends Activity {
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setBackground(round(C_CARD2, dp(8)));
-        head.addView(headCell("名称", W_NAME, "name"));
+        head.addView(headCell(T.s("名称"), W_NAME, "name"));
         head.addView(headCell("PID", W_PID, "pid"));
-        head.addView(headCell("状态", W_STATE, null));
-        head.addView(headCell("用户名", W_USER, null));
+        head.addView(headCell(T.s("状态"), W_STATE, null));
+        head.addView(headCell(T.s("用户名"), W_USER, null));
         head.addView(headCell("CPU", W_CPU, "cpu"));
-        head.addView(headCell("内存", W_MEM, "mem"));
-        head.addView(headCell("体系", W_ARCH, null));
-        head.addView(cell("描述", 116, C_SUB, 11, true));
+        head.addView(headCell(T.s("内存"), W_MEM, "mem"));
+        head.addView(headCell(T.s("体系"), W_ARCH, null));
+        head.addView(cell(T.s("描述"), 116, C_SUB, 11, true));
         detailList.addView(head);
 
         if (s == null) return;
@@ -815,7 +899,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < cap; i++) detailList.addView(detailRow(ps.get(i), i));
         if (ps.size() > cap) {
             TextView more = new TextView(this);
-            more.setText("… 共 " + ps.size() + " 项，已显示前 " + cap + " 项");
+            more.setText(T.s("… 共 ") + ps.size() + T.s(" 项，已显示前 ") + cap + T.s(" 项"));
             more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             more.setTextColor(C_SUB);
             more.setPadding(dp(6), dp(8), dp(6), dp(8));
@@ -865,13 +949,13 @@ public class MainActivity extends Activity {
     private String stateShort(String st) {
         if (st == null || st.isEmpty()) return "?";
         switch (st.charAt(0)) {
-            case 'R': return "运行";
-            case 'S': return "睡眠";
-            case 'D': return "IO等待";
-            case 'Z': return "僵尸";
-            case 'T': case 't': return "停止";
-            case 'X': return "退出";
-            case 'I': return "空闲";
+            case 'R': return T.s("运行");
+            case 'S': return T.s("睡眠");
+            case 'D': return T.s("IO等待");
+            case 'Z': return T.s("僵尸");
+            case 'T': case 't': return T.s("停止");
+            case 'X': return T.s("退出");
+            case 'I': return T.s("空闲");
             default: return st;
         }
     }
@@ -916,40 +1000,80 @@ public class MainActivity extends Activity {
         if (settingsBox == null) return;
         settingsBox.removeAllViews();
 
-        sectionTitle("外观");
-        settingRow("主题", sp.getBoolean("dark", true) ? "深色" : "浅色", () ->
-                choose("主题", new String[]{"深色", "浅色"}, sp.getBoolean("dark", true) ? 0 : 1, i -> {
-                    sp.edit().putBoolean("dark", i == 0).apply();
-                    recreate();
-                }));
+        sectionTitle(T.s("外观"));
+        settingRow(T.s("主题"), themeLabel(), () -> {
+            String[] keys = {"default", "dark", "light", "monet"};
+            String[] labels = {T.s("默认"), T.s("深色"), T.s("浅色"), T.s("莫奈取色")};
+            int cur = 0;
+            for (int i = 0; i < keys.length; i++) if (keys[i].equals(themeMode)) cur = i;
+            if (Build.VERSION.SDK_INT < 31) {
+                labels[3] = T.s("莫奈取色（需 Android 12+）");
+            }
+            choose(T.s("主题"), labels, cur, i -> {
+                if (i == 3 && Build.VERSION.SDK_INT < 31) {
+                    toast(T.s("莫奈取色需要 Android 12 及以上"));
+                    return;
+                }
+                themeMode = keys[i];
+                sp.edit().putString("theme", themeMode).apply();
+                recreate();
+            });
+        });
 
-        settingRow("曲线点数", String.valueOf(sp.getInt("points", 60)), () -> {
+        settingRow(T.s("背景图片"), sp.getString("bgUri", null) == null ? T.s("未设置") : T.s("已设置"), () -> {
+            boolean has = sp.getString("bgUri", null) != null;
+            String[] items = has ? new String[]{T.s("选择背景图"), T.s("恢复默认背景")} : new String[]{T.s("选择背景图")};
+            choose(T.s("背景图片"), items, 0, i -> {
+                if (i == 1) {
+                    sp.edit().remove("bgUri").apply();
+                    recreate();
+                } else {
+                    pickBackground();
+                }
+            });
+        });
+
+        settingRow(T.s("卡片模糊"), sp.getBoolean("bgBlur", true) ? T.s("开") : T.s("关"), () -> {
+            boolean v = !sp.getBoolean("bgBlur", true);
+            sp.edit().putBoolean("bgBlur", v).apply();
+            recreate();
+        });
+
+        settingRow(T.s("曲线点数"), String.valueOf(sp.getInt("points", 60)), () -> {
             int[] vals = {30, 60, 120};
             int cur = 1;
             for (int i = 0; i < vals.length; i++) if (vals[i] == sp.getInt("points", 60)) cur = i;
-            choose("曲线点数（个）", new String[]{"30", "60", "120"}, cur, i -> {
+            choose(T.s("曲线点数（个）"), new String[]{"30", "60", "120"}, cur, i -> {
                 sp.edit().putInt("points", vals[i]).apply();
                 applySparkPoints();
                 refreshSettings();
             });
         });
 
-        sectionTitle("刷新");
-        settingRow("刷新间隔", intervalLabel(), () -> {
+        sectionTitle(T.s("通用"));
+        settingRow(T.s("语言"), "en".equals(sp.getString("lang", "zh")) ? "English" : T.s("中文"), () ->
+                choose(T.s("语言"), new String[]{T.s("中文"), "English"},
+                        "en".equals(sp.getString("lang", "zh")) ? 1 : 0, i -> {
+                            sp.edit().putString("lang", i == 0 ? "zh" : "en").apply();
+                            recreate();
+                        }));
+
+        sectionTitle(T.s("刷新"));
+        settingRow(T.s("刷新间隔"), intervalLabel(), () -> {
             int[] vals = {1000, 1500, 2000, 3000, 5000};
-            String[] labels = {"1 秒", "1.5 秒", "2 秒", "3 秒", "5 秒"};
+            String[] labels = {T.s("1 秒"), T.s("1.5 秒"), T.s("2 秒"), T.s("3 秒"), T.s("5 秒")};
             int cur = 1;
             for (int i = 0; i < vals.length; i++) if (vals[i] == intervalMs) cur = i;
-            choose("刷新间隔", labels, cur, i -> {
+            choose(T.s("刷新间隔"), labels, cur, i -> {
                 intervalMs = vals[i];
                 sp.edit().putInt("interval", vals[i]).apply();
                 refreshSettings();
             });
         });
 
-        sectionTitle("进程列表");
-        settingRow("默认排序", sortLabel(), () ->
-                choose("默认排序", new String[]{"CPU", "内存", "名称"},
+        sectionTitle(T.s("进程列表"));
+        settingRow(T.s("默认排序"), sortLabel(), () ->
+                choose(T.s("默认排序"), new String[]{"CPU", T.s("内存"), T.s("名称")},
                         sortBy.equals("cpu") ? 0 : (sortBy.equals("mem") ? 1 : 2), i -> {
                             sortBy = i == 0 ? "cpu" : (i == 1 ? "mem" : "name");
                             sp.edit().putString("sort", sortBy).apply();
@@ -958,8 +1082,8 @@ public class MainActivity extends Activity {
                             refreshSettings();
                         }));
 
-        settingRow("默认分类", filterLabel(), () ->
-                choose("默认分类", new String[]{"全部", "系统", "用户"},
+        settingRow(T.s("默认分类"), filterLabel(), () ->
+                choose(T.s("默认分类"), new String[]{T.s("全部"), T.s("系统"), T.s("用户")},
                         filterMode.equals("all") ? 0 : (filterMode.equals("system") ? 1 : 2), i -> {
                             filterMode = i == 0 ? "all" : (i == 1 ? "system" : "app");
                             sp.edit().putString("filter", filterMode).apply();
@@ -968,8 +1092,8 @@ public class MainActivity extends Activity {
                             refreshSettings();
                         }));
 
-        settingRow("CPU 视图", cpuMode.equals("agg") ? "合并曲线" : "分核心", () ->
-                choose("CPU 视图", new String[]{"合并曲线", "分核心"},
+        settingRow(T.s("CPU 视图"), cpuMode.equals("agg") ? T.s("合并曲线") : T.s("分核心"), () ->
+                choose(T.s("CPU 视图"), new String[]{T.s("合并曲线"), T.s("分核心")},
                         cpuMode.equals("agg") ? 0 : 1, i -> {
                             cpuMode = i == 0 ? "agg" : "per";
                             sp.edit().putString("cpuMode", cpuMode).apply();
@@ -978,8 +1102,8 @@ public class MainActivity extends Activity {
                             refreshSettings();
                         }));
 
-        settingRow("进程视图", viewMode.equals("flat") ? "平铺" : "树形", () ->
-                choose("进程视图", new String[]{"平铺", "树形"}, viewMode.equals("flat") ? 0 : 1, i -> {
+        settingRow(T.s("进程视图"), viewMode.equals("flat") ? T.s("平铺") : T.s("树形"), () ->
+                choose(T.s("进程视图"), new String[]{T.s("平铺"), T.s("树形")}, viewMode.equals("flat") ? 0 : 1, i -> {
                     viewMode = i == 0 ? "flat" : "tree";
                     sp.edit().putString("viewMode", viewMode).apply();
                     syncChips();
@@ -987,36 +1111,212 @@ public class MainActivity extends Activity {
                     refreshSettings();
                 }));
 
-        settingRow("隐藏内核线程", sp.getBoolean("hideKernel", false) ? "开" : "关", () -> {
+        settingRow(T.s("隐藏内核线程"), sp.getBoolean("hideKernel", false) ? T.s("开") : T.s("关"), () -> {
             boolean v = !sp.getBoolean("hideKernel", false);
             sp.edit().putBoolean("hideKernel", v).apply();
             render(last);
             refreshSettings();
         });
 
-        settingRow("隐藏本应用", sp.getBoolean("hideSelf", false) ? "开" : "关", () -> {
+        settingRow(T.s("隐藏本应用"), sp.getBoolean("hideSelf", false) ? T.s("开") : T.s("关"), () -> {
             boolean v = !sp.getBoolean("hideSelf", false);
             sp.edit().putBoolean("hideSelf", v).apply();
             render(last);
             refreshSettings();
         });
 
-        sectionTitle("关于");
-        TextView about = new TextView(this);
-        about.setText("Android 任务管理器  v" + appVersion() + "\n"
-                + "监控 CPU / 内存 / 进程树；有 root 时功能完整，\n"
-                + "无 root 时 CPU 由 cpufreq 频率推算。\n\n"
-                + "开源地址  https://github.com/Kalpa0448/TaskMgr\n"
-                + "本程序以 MIT 协议开源，欢迎提交 Issue 与 PR。\n"
-                + "© 2026 范特西 · MIT License");
-        // 让仓库链接可点击
-        about.setAutoLinkMask(android.text.util.Linkify.WEB_URLS);
-        about.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
-        about.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        about.setTextColor(C_SUB);
-        about.setLineSpacing(dp(3), 1f);
-        about.setPadding(dp(14), dp(8), dp(14), dp(8));
-        settingsBox.addView(about, lp(-1, -2, 0, 0, 0, dp(10)));
+        sectionTitle(T.s("数据"));
+        settingRow(T.s("导出进程列表（Excel）"), "xlsx", this::exportExcel);
+
+        sectionTitle(T.s("关于"));
+        settingRow(T.s("关于"), "v" + appVersion(), this::showAbout);
+    }
+
+    private String themeLabel() {
+        switch (themeMode) {
+            case "dark": return T.s("深色");
+            case "light": return T.s("浅色");
+            case "monet": return T.s("莫奈取色");
+            default: return T.s("默认");
+        }
+    }
+
+    private void showAbout() {
+        TextView tv = new TextView(this);
+        tv.setText(T.s("Android 任务管理器  v") + appVersion() + "\n"
+                + T.s("监控 CPU / 内存 / 进程树；有 root 时功能完整，\n")
+                + T.s("无 root 时 CPU 由 cpufreq 频率推算。\n\n")
+                + T.s("开源地址  https://github.com/Kalpa0448/TaskMgr\n")
+                + T.s("本程序以 MIT 协议开源，欢迎提交 Issue 与 PR。\n")
+                + T.s("© 2026 范特西 · MIT License"));
+        tv.setAutoLinkMask(android.text.util.Linkify.WEB_URLS);
+        tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        tv.setLineSpacing(dp(4), 1f);
+        tv.setPadding(dp(20), dp(16), dp(20), dp(16));
+        new AlertDialog.Builder(this).setTitle(T.s("关于")).setView(tv)
+                .setPositiveButton(T.s("关闭"), null).show();
+    }
+
+    /* ================= 背景图 / 模糊 ================= */
+
+    private static final int REQ_BG = 1001;
+
+    private void pickBackground() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("image/*");
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        try {
+            startActivityForResult(i, REQ_BG);
+        } catch (Throwable t) {
+            toast(T.s("无法打开相册"));
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_BG && resultCode == RESULT_OK && data != null && data.getData() != null) {
+            Uri u = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(
+                        u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Throwable ignored) { }
+            sp.edit().putString("bgUri", u.toString()).apply();
+            recreate();
+        }
+    }
+
+    private void applyBackground() {
+        String uriStr = sp.getString("bgUri", null);
+        Bitmap bm = null;
+        if (uriStr != null) {
+            bm = loadBg(Uri.parse(uriStr));
+            if (bm != null && sp.getBoolean("bgBlur", true)) bm = blur(bm);
+        }
+        ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
+        if (bm == null) {
+            getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
+            for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
+        } else {
+            getWindow().setBackgroundDrawable(new BitmapDrawable(getResources(), bm));
+            for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
+        }
+    }
+
+    private Bitmap loadBg(Uri uri) {
+        try {
+            BitmapFactory.Options probe = new BitmapFactory.Options();
+            probe.inJustDecodeBounds = true;
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                BitmapFactory.decodeStream(in, null, probe);
+            }
+            int scale = 1;
+            while (probe.outWidth / scale > 1440) scale *= 2;
+            BitmapFactory.Options opt = new BitmapFactory.Options();
+            opt.inSampleSize = Math.max(1, scale);
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                return BitmapFactory.decodeStream(in, null, opt);
+            }
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 缩放在放大 = 廉价高斯模糊，所有 API 都能用 */
+    private Bitmap blur(Bitmap src) {
+        try {
+            int w = Math.max(1, src.getWidth() / 32);
+            int h = Math.max(1, src.getHeight() / 32);
+            Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
+            Bitmap out = Bitmap.createScaledBitmap(small, src.getWidth(), src.getHeight(), true);
+            if (out != small) small.recycle();
+            return out;
+        } catch (Throwable t) {
+            return src;
+        }
+    }
+
+    /* ================= 导出 Excel ================= */
+
+    private static final String XLSX_MIME =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    private void exportExcel() {
+        final ProcCollector.Snapshot s = last;
+        if (s == null || s.procs.isEmpty()) {
+            toast(T.s("没有可导出的进程数据"));
+            return;
+        }
+        toast(T.s("正在导出…"));
+        new Thread(() -> {
+            String name = "TaskMgr-"
+                    + new java.text.SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+                    .format(new java.util.Date())
+                    + ".xlsx";
+            try {
+                java.util.List<String[]> rows = new java.util.ArrayList<>();
+                rows.add(new String[]{T.s("名称"), "PID", T.s("用户名"), "UID", T.s("状态"),
+                        "CPU %", T.s("内存 (MB)"), T.s("体系"), T.s("父进程"), T.s("线程"), T.s("描述")});
+                for (ProcCollector.Proc p : s.procs) {
+                    rows.add(new String[]{
+                            p.name,
+                            String.valueOf(p.pid),
+                            ProcCollector.userName(p.uid),
+                            String.valueOf(p.uid),
+                            ProcCollector.stateName(p.state),
+                            String.format(Locale.ROOT, "%.1f", p.cpu),
+                            String.valueOf(p.rssBytes / 1048576L),
+                            p.arch,
+                            String.valueOf(p.ppid),
+                            String.valueOf(p.threads),
+                            labelFor(p)
+                    });
+                }
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues cv = new ContentValues();
+                    cv.put(MediaStore.Downloads.DISPLAY_NAME, name);
+                    cv.put(MediaStore.Downloads.MIME_TYPE, XLSX_MIME);
+                    Uri uri = getContentResolver()
+                            .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                    if (uri == null) throw new java.io.IOException(T.s("无法创建目标文件"));
+                    try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                        XlsxWriter.write(os, "Processes", rows);
+                    }
+                    ui.post(() -> showExportDone(uri, name));
+                } else {
+                    File dir = getExternalFilesDir(null);
+                    File f = new File(dir, name);
+                    XlsxWriter.write(f, "Processes", rows);
+                    ui.post(() -> showExportDone(null, f.getAbsolutePath()));
+                }
+            } catch (Throwable t) {
+                ui.post(() -> toast(T.s("导出失败: ") + t));
+            }
+        }, "export").start();
+    }
+
+    private void showExportDone(Uri uri, String name) {
+        String where = uri != null ? T.s("下载/") + name : name;
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(T.s("已导出"))
+                .setMessage(where)
+                .setPositiveButton(T.s("关闭"), null);
+        if (uri != null) {
+            b.setNeutralButton(T.s("打开"), (d, w) -> {
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW)
+                            .setDataAndType(uri, XLSX_MIME)
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(i);
+                } catch (Throwable t) {
+                    toast(T.s("无法打开文件管理器"));
+                }
+            });
+        }
+        b.show();
     }
 
     private String appVersion() {
@@ -1073,19 +1373,19 @@ public class MainActivity extends Activity {
     private interface IntConsumer { void accept(int i); }
 
     private String intervalLabel() {
-        if (intervalMs == 1000) return "1 秒";
-        if (intervalMs == 1500) return "1.5 秒";
-        if (intervalMs == 2000) return "2 秒";
-        if (intervalMs == 3000) return "3 秒";
-        return "5 秒";
+        if (intervalMs == 1000) return T.s("1 秒");
+        if (intervalMs == 1500) return T.s("1.5 秒");
+        if (intervalMs == 2000) return T.s("2 秒");
+        if (intervalMs == 3000) return T.s("3 秒");
+        return T.s("5 秒");
     }
 
     private String sortLabel() {
-        return sortBy.equals("cpu") ? "CPU" : (sortBy.equals("mem") ? "内存" : "名称");
+        return sortBy.equals("cpu") ? "CPU" : (sortBy.equals("mem") ? T.s("内存") : T.s("名称"));
     }
 
     private String filterLabel() {
-        return filterMode.equals("all") ? "全部" : (filterMode.equals("system") ? "系统" : "用户");
+        return filterMode.equals("all") ? T.s("全部") : (filterMode.equals("system") ? T.s("系统") : T.s("用户"));
     }
 
     /* ================= 数据循环 ================= */
@@ -1111,22 +1411,22 @@ public class MainActivity extends Activity {
         double memPct = m.memTotal > 0 ? m.used() * 100.0 / m.memTotal : 0;
 
         tvCpu.setText(String.format(Locale.ROOT, "%.1f%%", s.cpuPercent));
-        tvModeHint.setText(s.cpuFromFreq ? "由 CPU 频率推算（无 root）" : "");
+        tvModeHint.setText(s.cpuFromFreq ? T.s("由 CPU 频率推算（无 root）") : "");
         setBar(trackCpu, barCpu, s.cpuPercent, C_CPU);
         sparkCpu.push((float) s.cpuPercent);
         tvCpuSub.setText(s.cpuFromFreq
-                ? String.format(Locale.ROOT, "%d 核 · 频率推算模式", s.cores)
-                : String.format(Locale.ROOT, "%d 核 · 负载 %.2f / %.2f / %.2f",
+                ? String.format(Locale.ROOT, T.s("%d 核 · 频率推算模式"), s.cores)
+                : String.format(Locale.ROOT, T.s("%d 核 · 负载 %.2f / %.2f / %.2f"),
                 s.cores, s.load1, s.load5, s.load15));
         renderCores(s);
 
         ProcCollector.Thermal th = ProcCollector.cpuThermal(s);
         if (th != null) {
-            tvTemp.setText(String.format(Locale.ROOT, "温度 %.1f°C  ·  %s", th.celsius, th.type));
+            tvTemp.setText(String.format(Locale.ROOT, T.s("温度 %.1f°C  ·  %s"), th.celsius, th.type));
             tvTemp.setTextColor(th.celsius >= 60 ? C_WARN
                     : (th.celsius >= 45 ? C_SWAP : C_MEM));
         } else {
-            tvTemp.setText("温度 —（未找到 thermal 节点）");
+            tvTemp.setText(T.s("温度 —（未找到 thermal 节点）"));
             tvTemp.setTextColor(C_SUB);
         }
 
@@ -1135,13 +1435,13 @@ public class MainActivity extends Activity {
                     m.used() / 1073741824.0, m.memTotal / 1073741824.0));
             setBar(trackMem, barMem, memPct, C_MEM);
             sparkMem.push((float) memPct);
-            tvMemSub.setText(String.format(Locale.ROOT, "可用 %.1f GB · 占用 %.0f%%",
+            tvMemSub.setText(String.format(Locale.ROOT, T.s("可用 %.1f GB · 占用 %.0f%%"),
                     m.memAvail / 1073741824.0, memPct));
             StringBuilder sw = new StringBuilder();
             if (m.swapTotal > 0) {
                 sw.append(String.format(Locale.ROOT, "Swap %.1f / %.1f GB",
                         m.swapUsed() / 1073741824.0, m.swapTotal / 1073741824.0));
-            } else sw.append("无 Swap");
+            } else sw.append(T.s("无 Swap"));
             for (ProcCollector.Zram z : s.zrams) {
                 sw.append(String.format(Locale.ROOT, " · %s[%s] %.1f×", z.dev, z.algo, z.ratio()));
             }
@@ -1167,21 +1467,26 @@ public class MainActivity extends Activity {
     }
 
     private void renderTree(ProcCollector.Snapshot s) {
+        if (s.loading) {
+            list.removeAllViews();
+            list.addView(errorView(T.s("正在加载进程列表…")));
+            return;
+        }
         List<ProcCollector.Proc> all = s.procs;
         filterCache.clear();
         for (ProcCollector.Proc p : all) filterCache.add(p);
 
         int sysN = 0, appN = 0;
         for (ProcCollector.Proc p : all) { if (p.isSystem()) sysN++; else appN++; }
-        chipAll.setText("全部(" + all.size() + ")");
-        chipSys.setText("系统(" + sysN + ")");
-        chipApp.setText("用户(" + appN + ")");
+        chipAll.setText(T.s("全部(") + all.size() + ")");
+        chipSys.setText(T.s("系统(") + sysN + ")");
+        chipApp.setText(T.s("用户(") + appN + ")");
         if (dChipAll != null) {
-            dChipAll.setText("全部(" + all.size() + ")");
-            dChipSys.setText("系统(" + sysN + ")");
-            dChipApp.setText("用户(" + appN + ")");
+            dChipAll.setText(T.s("全部(") + all.size() + ")");
+            dChipSys.setText(T.s("系统(") + sysN + ")");
+            dChipApp.setText(T.s("用户(") + appN + ")");
         }
-        tvProc.setText("共 " + all.size() + " 个进程");
+        tvProc.setText(T.s("共 ") + all.size() + T.s(" 个进程"));
 
         boolean hideKernel = sp.getBoolean("hideKernel", false);
         boolean hideSelf = sp.getBoolean("hideSelf", false);
@@ -1221,7 +1526,7 @@ public class MainActivity extends Activity {
         }
         if (roots.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText(keyword.isEmpty() ? "此分类下没有进程" : "没有匹配「" + keyword + "」的进程");
+            empty.setText(keyword.isEmpty() ? T.s("此分类下没有进程") : T.s("没有匹配「") + keyword + T.s("」的进程"));
             empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             empty.setTextColor(C_SUB);
             empty.setPadding(dp(4), dp(16), dp(4), dp(16));
@@ -1232,7 +1537,7 @@ public class MainActivity extends Activity {
         for (ProcCollector.Proc r : roots) addNode(r, 0, children, budget);
         if (budget[0] <= 0) {
             TextView more = new TextView(this);
-            more.setText("… 已截断，可用搜索或选项卡缩小范围");
+            more.setText(T.s("… 已截断，可用搜索或选项卡缩小范围"));
             more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             more.setTextColor(C_SUB);
             more.setPadding(dp(4), dp(8), dp(4), dp(8));
@@ -1245,7 +1550,7 @@ public class MainActivity extends Activity {
     private void renderFlat(List<ProcCollector.Proc> ps) {
         if (ps.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText(keyword.isEmpty() ? "此分类下没有进程" : "没有匹配「" + keyword + "」的进程");
+            empty.setText(keyword.isEmpty() ? T.s("此分类下没有进程") : T.s("没有匹配「") + keyword + T.s("」的进程"));
             empty.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             empty.setTextColor(C_SUB);
             empty.setPadding(dp(4), dp(16), dp(4), dp(16));
@@ -1262,7 +1567,7 @@ public class MainActivity extends Activity {
         }
         if (sorted.size() > cap) {
             TextView more = new TextView(this);
-            more.setText("… 共 " + sorted.size() + " 个，已显示前 " + cap + " 个");
+            more.setText(T.s("… 共 ") + sorted.size() + T.s(" 个，已显示前 ") + cap + T.s(" 个"));
             more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
             more.setTextColor(C_SUB);
             more.setPadding(dp(4), dp(8), dp(4), dp(8));
@@ -1320,9 +1625,9 @@ public class MainActivity extends Activity {
 
         TextView sub = new TextView(this);
         StringBuilder sb = new StringBuilder("PID ").append(p.pid);
-        if (p.pid == selfPid) sb.append(" · 本应用");
+        if (p.pid == selfPid) sb.append(T.s(" · 本应用"));
         else sb.append(" · uid ").append(p.uid);
-        if (hasKids) sb.append(" · 子进程 ").append(childCount);
+        if (hasKids) sb.append(T.s(" · 子进程 ")).append(childCount);
         sub.setText(sb);
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
         sub.setTextColor(C_SUB);
@@ -1348,7 +1653,7 @@ public class MainActivity extends Activity {
         wrap.addView(mem);
 
         TextView kill = new TextView(this);
-        kill.setText("结束");
+        kill.setText(T.s("结束"));
         kill.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         kill.setTextColor(C_WARN);
         kill.setPadding(dp(7), dp(4), dp(7), dp(4));
@@ -1371,13 +1676,13 @@ public class MainActivity extends Activity {
         long sum = Math.max(1, t.sum());
 
         StringBuilder sb = new StringBuilder();
-        if (!rootOk) sb.append("⚠ 未获得 root：以下 CPU 时间为 0，频率来自 cpufreq\n\n");
-        sb.append("芯片：").append(socName()).append('\n');
-        sb.append("核心数：").append(s.cores).append('\n');
+        if (!rootOk) sb.append(T.s("⚠ 未获得 root：以下 CPU 时间为 0，频率来自 cpufreq\n\n"));
+        sb.append(T.s("芯片：")).append(socName()).append('\n');
+        sb.append(T.s("核心数：")).append(s.cores).append('\n');
         if (!s.coreList.isEmpty()) {
-            sb.append("频率范围：").append(ProcCollector.ghz(s.coreList.get(0).minKhz))
+            sb.append(T.s("频率范围：")).append(ProcCollector.ghz(s.coreList.get(0).minKhz))
                     .append(" ~ ").append(ProcCollector.ghz(s.coreList.get(0).maxKhz)).append("\n\n");
-            sb.append("【每核当前频率 / 占用】\n");
+            sb.append(T.s("【每核当前频率 / 占用】\n"));
             for (ProcCollector.Core c : s.coreList) {
                 sb.append("  CPU").append(c.id).append("  ")
                         .append(ProcCollector.ghz(c.curKhz)).append("  ")
@@ -1385,18 +1690,18 @@ public class MainActivity extends Activity {
             }
             sb.append('\n');
         }
-        sb.append("【CPU 时间构成】\n");
-        sb.append(fmtShare("user     用户态", t.user, sum));
-        sb.append(fmtShare("nice     低优先级", t.nice, sum));
-        sb.append(fmtShare("system   内核态", t.system, sum));
-        sb.append(fmtShare("idle     空闲", t.idle, sum));
-        sb.append(fmtShare("iowait   等待 IO", t.iowait, sum));
-        sb.append(fmtShare("irq      硬中断", t.irq, sum));
-        sb.append(fmtShare("softirq  软中断", t.softirq, sum));
-        sb.append(fmtShare("steal    虚拟化占用", t.steal, sum));
+        sb.append(T.s("【CPU 时间构成】\n"));
+        sb.append(fmtShare(T.s("user     用户态"), t.user, sum));
+        sb.append(fmtShare(T.s("nice     低优先级"), t.nice, sum));
+        sb.append(fmtShare(T.s("system   内核态"), t.system, sum));
+        sb.append(fmtShare(T.s("idle     空闲"), t.idle, sum));
+        sb.append(fmtShare(T.s("iowait   等待 IO"), t.iowait, sum));
+        sb.append(fmtShare(T.s("irq      硬中断"), t.irq, sum));
+        sb.append(fmtShare(T.s("softirq  软中断"), t.softirq, sum));
+        sb.append(fmtShare(T.s("steal    虚拟化占用"), t.steal, sum));
         sb.append('\n');
         if (!s.thermals.isEmpty()) {
-            sb.append("【温度】\n");
+            sb.append(T.s("【温度】\n"));
             int n = 0;
             for (ProcCollector.Thermal th : s.thermals) {
                 if (n++ >= 12) break;
@@ -1404,16 +1709,16 @@ public class MainActivity extends Activity {
             }
             sb.append('\n');
         }
-        sb.append("【系统活动】\n");
-        sb.append("  上下文切换：").append(fmtNum(t.ctxt)).append('\n');
-        sb.append("  中断次数：").append(fmtNum(t.intr)).append('\n');
-        sb.append("  已创建进程：").append(fmtNum(t.procsCreated)).append('\n');
-        sb.append("  运行中 / 阻塞：").append(t.procsRunning).append(" / ").append(t.procsBlocked).append('\n');
-        sb.append("  负载 1/5/15：").append(String.format(Locale.ROOT, "%.2f / %.2f / %.2f",
+        sb.append(T.s("【系统活动】\n"));
+        sb.append(T.s("  上下文切换：")).append(fmtNum(t.ctxt)).append('\n');
+        sb.append(T.s("  中断次数：")).append(fmtNum(t.intr)).append('\n');
+        sb.append(T.s("  已创建进程：")).append(fmtNum(t.procsCreated)).append('\n');
+        sb.append(T.s("  运行中 / 阻塞：")).append(t.procsRunning).append(" / ").append(t.procsBlocked).append('\n');
+        sb.append(T.s("  负载 1/5/15：")).append(String.format(Locale.ROOT, "%.2f / %.2f / %.2f",
                 s.load1, s.load5, s.load15)).append('\n');
-        sb.append("  开机时长：").append(fmtDuration((long) s.uptime)).append('\n');
+        sb.append(T.s("  开机时长：")).append(fmtDuration((long) s.uptime)).append('\n');
 
-        showLongDialog("CPU 详细信息", sb.toString());
+        showLongDialog(T.s("CPU 详细信息"), sb.toString());
     }
 
     private void showMemDetail() {
@@ -1421,11 +1726,11 @@ public class MainActivity extends Activity {
         if (s == null) return;
         ProcCollector.MemInfo m = s.mem;
         StringBuilder sb = new StringBuilder();
-        sb.append("【物理内存】\n");
-        sb.append(kv("总量", gb(m.memTotal)));
-        sb.append(kv("已用", gb(m.used())));
-        sb.append(kv("可用", gb(m.memAvail)));
-        sb.append(kv("空闲", gb(m.memFree)));
+        sb.append(T.s("【物理内存】\n"));
+        sb.append(kv(T.s("总量"), gb(m.memTotal)));
+        sb.append(kv(T.s("已用"), gb(m.used())));
+        sb.append(kv(T.s("可用"), gb(m.memAvail)));
+        sb.append(kv(T.s("空闲"), gb(m.memFree)));
         sb.append(kv("Buffers", gb(m.buffers)));
         sb.append(kv("Cached", gb(m.cached)));
         sb.append(kv("Active", gb(m.active)));
@@ -1435,19 +1740,19 @@ public class MainActivity extends Activity {
         sb.append(kv("Shmem", gb(m.shmem)));
         sb.append(kv("Slab", gb(m.slab)));
         sb.append(kv("PageTables", gb(m.pageTables)));
-        sb.append(kv("内核栈", gb(m.kernelStack)));
+        sb.append(kv(T.s("内核栈"), gb(m.kernelStack)));
 
-        sb.append("\n【虚拟内存】\n");
+        sb.append(T.s("\n【虚拟内存】\n"));
         sb.append(kv("VmallocTotal", gb(m.vmallocTotal)));
         sb.append(kv("VmallocUsed", gb(m.vmallocUsed)));
         sb.append(kv("VmallocChunk", gb(m.vmallocChunk)));
         sb.append(kv("CommitLimit", gb(m.commitLimit)));
-        sb.append(kv("Committed_AS", gb(m.committedAs) + "（可超售，大于 limit 属正常）"));
+        sb.append(kv("Committed_AS", gb(m.committedAs) + T.s("（可超售，大于 limit 属正常）")));
 
         sb.append("\n【Swap】\n");
-        sb.append(kv("总量", gb(m.swapTotal)));
-        sb.append(kv("已用", gb(m.swapUsed())));
-        sb.append(kv("空闲", gb(m.swapFree)));
+        sb.append(kv(T.s("总量"), gb(m.swapTotal)));
+        sb.append(kv(T.s("已用"), gb(m.swapUsed())));
+        sb.append(kv(T.s("空闲"), gb(m.swapFree)));
         sb.append(kv("SwapCached", gb(m.swapCached)));
         if (s.swaps != null && !s.swaps.isEmpty()) {
             sb.append("\n【/proc/swaps】\n");
@@ -1457,22 +1762,22 @@ public class MainActivity extends Activity {
             sb.append("\n【zram】\n");
             for (ProcCollector.Zram z : s.zrams) {
                 sb.append("  · ").append(z.dev).append('\n');
-                sb.append("    压缩算法：").append(z.algo).append('\n');
-                sb.append("    设备大小：").append(gb(z.disksize)).append('\n');
-                sb.append("    原始数据：").append(gb(z.origData)).append('\n');
-                sb.append("    压缩后  ：").append(gb(z.comprData)).append('\n');
-                sb.append("    实际占用：").append(gb(z.memUsed)).append('\n');
-                sb.append("    压缩比  ：").append(String.format(Locale.ROOT, "%.2f×", z.ratio())).append('\n');
+                sb.append(T.s("    压缩算法：")).append(z.algo).append('\n');
+                sb.append(T.s("    设备大小：")).append(gb(z.disksize)).append('\n');
+                sb.append(T.s("    原始数据：")).append(gb(z.origData)).append('\n');
+                sb.append(T.s("    压缩后  ：")).append(gb(z.comprData)).append('\n');
+                sb.append(T.s("    实际占用：")).append(gb(z.memUsed)).append('\n');
+                sb.append(T.s("    压缩比  ：")).append(String.format(Locale.ROOT, "%.2f×", z.ratio())).append('\n');
                 if (z.origData > 0) {
-                    sb.append(String.format(Locale.ROOT, "    节省    ：%.1f%%\n",
+                    sb.append(String.format(Locale.ROOT, T.s("    节省    ：%.1f%%\n"),
                             (1 - (double) z.comprData / z.origData) * 100));
                 }
             }
         } else {
             sb.append("\n【zram】\n  ").append(rootOk
-                    ? "未检测到 zram 设备" : "需要 root 才能读取 /sys/block/zram*").append('\n');
+                    ? T.s("未检测到 zram 设备") : T.s("需要 root 才能读取 /sys/block/zram*")).append('\n');
         }
-        showLongDialog("内存详细信息", sb.toString());
+        showLongDialog(T.s("内存详细信息"), sb.toString());
     }
 
     private void showLongDialog(String title, String content) {
@@ -1486,7 +1791,7 @@ public class MainActivity extends Activity {
         tv.setTextIsSelectable(true);
         sv.addView(tv, new ViewGroup.LayoutParams(-1, -2));
         new AlertDialog.Builder(this).setTitle(title).setView(sv)
-                .setPositiveButton("关闭", null).show();
+                .setPositiveButton(T.s("关闭"), null).show();
     }
 
     private String kv(String k, String v) { return String.format(Locale.ROOT, "  %-18s %s\n", k, v); }
@@ -1516,7 +1821,7 @@ public class MainActivity extends Activity {
     }
 
     private String fmtDuration(long sec) {
-        return String.format(Locale.ROOT, "%d 天 %d 小时 %d 分",
+        return String.format(Locale.ROOT, T.s("%d 天 %d 小时 %d 分"),
                 sec / 86400, (sec % 86400) / 3600, (sec % 3600) / 60);
     }
 
@@ -1533,31 +1838,31 @@ public class MainActivity extends Activity {
     /* ================= 交互 ================= */
 
     private void confirmKill(ProcCollector.Proc p) {
-        if (!rootOk) { toast("需要 root"); return; }
-        if (p.pid <= 1) { toast("不能结束系统核心进程"); return; }
-        if (p.pid == selfPid) { toast("不能结束自己"); return; }
-        new AlertDialog.Builder(this).setTitle("结束进程")
-                .setMessage(p.name + "\nPID " + p.pid + " · uid " + p.uid + "\n\n强制结束可能导致异常退出。")
-                .setPositiveButton("结束", (d, w) -> new Thread(() -> {
+        if (!rootOk) { toast(T.s("需要 root")); return; }
+        if (p.pid <= 1) { toast(T.s("不能结束系统核心进程")); return; }
+        if (p.pid == selfPid) { toast(T.s("不能结束自己")); return; }
+        new AlertDialog.Builder(this).setTitle(T.s("结束进程"))
+                .setMessage(p.name + "\nPID " + p.pid + " · uid " + p.uid + T.s("\n\n强制结束可能导致异常退出。"))
+                .setPositiveButton(T.s("结束"), (d, w) -> new Thread(() -> {
                     boolean ok = ProcCollector.kill(p.pid);
-                    ui.post(() -> toast(ok ? "已结束 " + p.name : "结束失败"));
+                    ui.post(() -> toast(ok ? T.s("已结束 ") + p.name : T.s("结束失败")));
                 }).start())
-                .setNegativeButton("取消", null).show();
+                .setNegativeButton(T.s("取消"), null).show();
     }
 
     private void showDetail(ProcCollector.Proc p) {
         String sb = "PID：" + p.pid + '\n' +
-                "父进程：" + p.ppid + '\n' +
-                "UID：" + p.uid + (p.isSystem() ? "（系统）" : "（应用）") + '\n' +
-                "状态：" + ProcCollector.stateName(p.state) + '\n' +
-                "线程数：" + p.threads + '\n' +
-                "优先级：" + p.priority + "  nice：" + p.nice + '\n' +
+                T.s("父进程：") + p.ppid + '\n' +
+                "UID：" + p.uid + (p.isSystem() ? T.s("（系统）") : T.s("（应用）")) + '\n' +
+                T.s("状态：") + ProcCollector.stateName(p.state) + '\n' +
+                T.s("线程数：") + p.threads + '\n' +
+                T.s("优先级：") + p.priority + "  nice：" + p.nice + '\n' +
                 "CPU：" + String.format(Locale.ROOT, "%.1f%%", p.cpu) + '\n' +
-                "内存(RSS)：" + gb(p.rssBytes) + '\n' +
-                "虚拟内存(VSZ)：" + gb(p.vsize) + '\n' +
-                "运行时长：" + ProcCollector.fmtUptime(last, p.startTicks);
+                T.s("内存(RSS)：") + gb(p.rssBytes) + '\n' +
+                T.s("虚拟内存(VSZ)：") + gb(p.vsize) + '\n' +
+                T.s("运行时长：") + ProcCollector.fmtUptime(last, p.startTicks);
         new AlertDialog.Builder(this).setTitle(p.name).setMessage(sb)
-                .setPositiveButton("关闭", null).show();
+                .setPositiveButton(T.s("关闭"), null).show();
     }
 
     /* ================= 小组件 ================= */
@@ -1617,8 +1922,8 @@ public class MainActivity extends Activity {
 
     private void syncChips() {
         chipCpu.setText(sortBy.equals("cpu") ? "CPU↓" : "CPU");
-        chipMem.setText(sortBy.equals("mem") ? "内存↓" : "内存");
-        chipName.setText(sortBy.equals("name") ? "名称↓" : "名称");
+        chipMem.setText(sortBy.equals("mem") ? T.s("内存↓") : T.s("内存"));
+        chipName.setText(sortBy.equals("name") ? T.s("名称↓") : T.s("名称"));
         style(chipCpu, sortBy.equals("cpu"));
         style(chipMem, sortBy.equals("mem"));
         style(chipName, sortBy.equals("name"));

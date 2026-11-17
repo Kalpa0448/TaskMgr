@@ -69,7 +69,8 @@ public final class ProcCollector {
         public boolean root;
         public String error;
         public double cpuPercent;
-        public boolean complete = true;  // 本轮采集是否完整（防止截断数据污染 UI）
+        public boolean complete = true;   // 本轮采集是否完整（防止截断数据污染 UI）
+        public boolean loading = false;   // 首轮数据还没就绪
         public boolean cpuFromFreq;   // true=由 cpufreq 推算（无 root）
         public int cores;
         public CpuTimes cpuTimes = new CpuTimes();
@@ -182,7 +183,7 @@ public final class ProcCollector {
                 String[] p = out.split(SEP, -1);
                 for (int i = 0; i < Math.min(p.length, 9); i++) seg[i] = p[i];
             } catch (Throwable t) {
-                s.error = "读取失败: " + t;
+                s.error = T.s("读取失败: ") + t;
             }
         } else {
             // 某些 ROM 允许直接读，先试；读不到（SELinux 拒绝）返回 null
@@ -194,7 +195,7 @@ public final class ProcCollector {
             if (seg[0] == null || seg[0].trim().isEmpty()) {
                 s.cpuFromFreq = true;      // 走 cpufreq 推算
             }
-            s.error = "无 root：进程列表/swap/zram 不可用；CPU 由频率推算。";
+            s.error = T.s("无 root：进程列表/swap/zram 不可用；CPU 由频率推算。");
         }
 
         /* ---- CPU 总与每核 ---- */
@@ -399,6 +400,19 @@ public final class ProcCollector {
             prevProc.clear();
             prevProc.putAll(now);
             s.procCount = s.procs.size();
+
+            if (!s.complete) {
+                if (lastGood != null && !lastGood.isEmpty()) {
+                    // 本轮被截断：沿用上一轮的完整列表，避免列表“先少后多”地跳
+                    s.procs = new ArrayList<>(lastGood);
+                    s.procCount = s.procs.size();
+                } else {
+                    // 首轮就不完整：宁可显示“加载中”，也不显示残缺列表
+                    s.procs.clear();
+                    s.procCount = 0;
+                    s.loading = true;
+                }
+            }
         } else if (lastGood != null && lastGood.size() > 5) {
             // 本轮取不到，沿用上一轮，避免列表忽多忽少
             s.procs.addAll(lastGood);
@@ -408,7 +422,7 @@ public final class ProcCollector {
             Proc self = new Proc();
             self.pid = android.os.Process.myPid();
             String nm = ReadFile("/proc/self/comm", 128);
-            self.name = (nm == null || nm.trim().isEmpty()) ? "本应用" : nm.trim();
+            self.name = (nm == null || nm.trim().isEmpty()) ? T.s("本应用") : nm.trim();
             self.uid = android.os.Process.myUid();
             self.threads = Thread.activeCount();
             String st = ReadFile("/proc/self/statm", 256);
@@ -419,7 +433,7 @@ public final class ProcCollector {
             s.procs.add(self);
             s.procCount = 1;
         }
-        if (s.complete && s.procs.size() > 5) lastGood = new ArrayList<>(s.procs);
+        if (s.complete && !s.loading && s.procs.size() > 5) lastGood = new ArrayList<>(s.procs);
         resolveArch(s);
         return s;
     }
@@ -556,14 +570,14 @@ public final class ProcCollector {
 
     public static String forceStop(String pkg) {
         try { return su("am force-stop " + pkg + " 2>&1"); }
-        catch (Throwable t) { return "失败: " + t; }
+        catch (Throwable t) { return T.s("失败: ") + t; }
     }
 
     public static String runBackground(String cmd) {
-        if (cmd == null || cmd.trim().isEmpty()) return "命令为空";
+        if (cmd == null || cmd.trim().isEmpty()) return T.s("命令为空");
         try {
             return su("nohup sh -c '" + cmd.replace("'", "'\\''") + "' >/dev/null 2>&1 & echo started");
-        } catch (Throwable t) { return "失败: " + t; }
+        } catch (Throwable t) { return T.s("失败: ") + t; }
     }
 
     public static int cleanBackground(List<Proc> procs, int selfPid) {
@@ -634,14 +648,14 @@ public final class ProcCollector {
     public static String stateName(String s) {
         if (s == null || s.isEmpty()) return "?";
         switch (s.charAt(0)) {
-            case 'R': return "运行中 (R)";
-            case 'S': return "可中断睡眠 (S)";
-            case 'D': return "不可中断 (D)";
-            case 'Z': return "僵尸 (Z)";
-            case 'T': return "已停止 (T)";
-            case 't': return "跟踪停止 (t)";
-            case 'X': return "已退出 (X)";
-            case 'I': return "空闲内核线程 (I)";
+            case 'R': return T.s("运行中 (R)");
+            case 'S': return T.s("可中断睡眠 (S)");
+            case 'D': return T.s("不可中断 (D)");
+            case 'Z': return T.s("僵尸 (Z)");
+            case 'T': return T.s("已停止 (T)");
+            case 't': return T.s("跟踪停止 (t)");
+            case 'X': return T.s("已退出 (X)");
+            case 'I': return T.s("空闲内核线程 (I)");
             default: return s;
         }
     }
@@ -651,7 +665,7 @@ public final class ProcCollector {
         long sec = (long) s.uptime - startTicks / HZ;
         if (sec < 0) sec = 0;
         long h = sec / 3600, m = (sec % 3600) / 60;
-        return h > 0 ? String.format("%d 小时 %d 分", h, m) : String.format("%d 分 %d 秒", m, sec % 60);
+        return h > 0 ? String.format(T.s("%d 小时 %d 分"), h, m) : String.format(T.s("%d 分 %d 秒"), m, sec % 60);
     }
 
     public static String ghz(long khz) {
