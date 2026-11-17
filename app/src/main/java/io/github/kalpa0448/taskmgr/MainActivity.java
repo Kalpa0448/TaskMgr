@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
             else if ("monet".equals(old)) acc = "monet";
             sp.edit().putString("accentMode", acc).putString("darkMode", dk).apply();
         }
-        bgPage = sp.getBoolean("bgPage", false);
+        bgPage = false;
         accentMode = sp.getString("accentMode", "default");
         darkMode = sp.getString("darkMode", "auto");
         T.setEnglish("en".equals(sp.getString("lang", "zh")));
@@ -1075,9 +1075,6 @@ public class MainActivity extends Activity {
             });
         });
 
-        settingRow(T.s("图片背景"),
-                bgFile().exists() ? T.s("已设置") : T.s("未设置"), this::openBgPage);
-
         settingRow(T.s("曲线点数"), String.valueOf(sp.getInt("points", 60)), () -> {
             int[] vals = {30, 60, 120};
             int cur = 1;
@@ -1259,6 +1256,16 @@ public class MainActivity extends Activity {
 
     /** 读本地背景图 → 裁成屏幕比例 → 需要时整张模糊 → 提取强调色 */
     private void prepareBackground() {
+        // 图片背景功能已移除：不加载、不模糊，避免性能开销
+        bgSharp = null;
+        bgBlurred = null;
+        bgAccent = 0;
+        bgLuma = 0;
+        return;
+    }
+
+    @SuppressWarnings("unused")
+    private void prepareBackgroundLegacy() {
         bgSharp = null;
         bgAccent = 0;
         if (!hasBg()) return;
