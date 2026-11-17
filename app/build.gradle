@@ -19,8 +19,8 @@ android {
         targetSdkVersion 33
         // 版本号规则：versionCode = major*10000 + minor*100 + patch
         // 1.0.0 -> 10000，1.1.0 -> 10100，1.1.1 -> 10101
-        versionCode 10102
-        versionName '1.1.2'
+        versionCode 10200
+        versionName '1.2.0'
     }
 
     signingConfigs {

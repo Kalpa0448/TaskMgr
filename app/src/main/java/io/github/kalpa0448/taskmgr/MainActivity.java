@@ -84,7 +84,8 @@ public class MainActivity extends Activity {
     private String accentMode = "default"; // default=固定蓝 / monet=壁纸取色
     private String darkMode   = "auto";    // auto=跟随系统 / light / dark
     private ScrollView rootScroll;
-    private Bitmap bgSharp;     // 背景原图（按屏幕裁切）
+    private Bitmap bgSharp;     // 背景图（已按屏幕裁切，可能已模糊）
+    private int bgAccent;       // 从背景图提取的强调色
     private Bitmap blurredBg;   // 卡片毛玻璃用的整屏模糊图
     private final Map<Integer, String> labelCache = new HashMap<>();
     private TextView tvCpu, tvCpuSub, tvMem, tvMemSub, tvSwap, tvProc, tvStatus, tvModeHint, tvTemp;
@@ -139,8 +140,8 @@ public class MainActivity extends Activity {
         // 让系统对话框（含详情弹窗）跟随应用主题
         setTheme(darkNow ? android.R.style.Theme_DeviceDefault_NoActionBar
                 : android.R.style.Theme_DeviceDefault_Light_NoActionBar);
+        prepareBackground();   // 先读背景：主题要用它取色，卡片要用它算透明度
         applyTheme();
-        prepareBackground();   // 必须在 build() 之前：卡片创建时要拿到模糊图
         sortBy = sp.getString("sort", "cpu");
         filterMode = sp.getString("filter", "all");
         cpuMode = sp.getString("cpuMode", "agg");
@@ -210,7 +211,9 @@ public class MainActivity extends Activity {
         boolean dark = isDarkMode();
 
         int accent = 0;
-        if ("monet".equals(accentMode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (sp.getBoolean("bgSeed", true) && bgAccent != 0) {
+            accent = bgAccent;                 // 从背景图取色优先
+        } else if ("monet".equals(accentMode) && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             accent = monetAccent(dark);
         }
         boolean monet = accent != 0;
@@ -243,12 +246,13 @@ public class MainActivity extends Activity {
         C_DANGER_BG = dark ? 0xFF43262A : 0xFFFBE4E4;
 
         // 设了自定义背景图 → 卡片半透明
-        if (sp.getString("bgUri", null) != null) {
-            boolean frost = sp.getBoolean("bgBlur", true);
-            int a = frost ? (dark ? 0x9E : 0xB8) : 0xE2;
-            C_CARD = withAlpha(C_CARD, a);
-            C_CARD2 = withAlpha(C_CARD2, Math.min(0xFF, a + 0x24));
-            C_CHIP = withAlpha(C_CHIP, a);
+        if (hasBg()) {
+            // 卡片不透明度：参考实现默认 55%
+            int pct = Math.max(10, Math.min(100, sp.getInt("cardAlpha", 55)));
+            int a = pct * 255 / 100;
+            C_CARD = withAlpha(blend(C_CARD, dark ? 0xFF000000 : 0xFFFFFFFF, 0.0f), a);
+            C_CARD2 = withAlpha(C_CARD2, Math.min(0xFF, a + 0x1E));
+            C_CHIP = withAlpha(C_CHIP, Math.min(0xFF, a + 0x28));
         }
 
         try {
@@ -1046,65 +1050,53 @@ public class MainActivity extends Activity {
             });
         });
 
-        settingRow(T.s("背景图片"), sp.getString("bgUri", null) == null ? T.s("未设置") : T.s("已设置"), () -> {
-            boolean has = sp.getString("bgUri", null) != null;
-            String[] items = has ? new String[]{T.s("选择背景图"), T.s("恢复默认背景")} : new String[]{T.s("选择背景图")};
-            choose(T.s("背景图片"), items, 0, i -> {
-                if (i == 1) {
-                    sp.edit().remove("bgUri").apply();
-                    recreate();
-                } else {
-                    pickBackground();
-                }
-            });
-        });
+        settingRowRaw(T.s("自定义背景"), T.s("选择一张图片作为应用背景"),
+                bgFile().exists() ? T.s("已设置") : T.s("未设置"), () -> {
+                    if (!bgFile().exists()) {
+                        pickBackground();
+                        return;
+                    }
+                    choose(T.s("自定义背景"),
+                            new String[]{T.s("更换图片"), T.s("删除背景")}, 0, i -> {
+                                if (i == 0) {
+                                    pickBackground();
+                                } else {
+                                    bgFile().delete();
+                                    recreate();
+                                }
+                            });
+                });
 
-        if (sp.getString("bgUri", null) != null) {
-            settingRow(T.s("恢复默认背景"), "", () -> {
-                sp.edit().remove("bgUri").apply();
-                recreate();
+        if (hasBg()) {
+            settingRow(T.s("裁切方式"),
+                    "inapp".equals(sp.getString("cropMode", "inapp"))
+                            ? T.s("应用内裁切") : T.s("外部裁切"), () -> {
+                String[] keys = {"inapp", "external"};
+                String[] labels = {T.s("应用内裁切"), T.s("外部裁切")};
+                int cur = "external".equals(sp.getString("cropMode", "inapp")) ? 1 : 0;
+                choose(T.s("裁切方式"), labels, cur, i2 -> {
+                    sp.edit().putString("cropMode", keys[i2]).apply();
+                    refreshSettings();
+                });
             });
         }
 
-        settingRow(T.s("卡片毛玻璃"), sp.getBoolean("bgBlur", true) ? T.s("开") : T.s("关"), () -> {
-            boolean v = !sp.getBoolean("bgBlur", true);
-            sp.edit().putBoolean("bgBlur", v).apply();
+        toggleRow(T.s("启用模糊"), T.s("对背景图做高斯模糊"), "bgBlur", true, null, null);
+
+        sliderRow(T.s("卡片不透明度"), "cardAlpha", 55,
+                T.s("卡片越不透明，文字越清晰"));
+
+        sliderRow(T.s("背景暗度调节"), "scrim", 30,
+                T.s("数值越大，背景越暗"));
+
+        toggleRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null, null);
+
+        toggleRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null, null);
+
+        settingRow(T.s("恢复默认背景"), "", () -> {
+            File f = bgFile();
+            if (f.exists()) f.delete();
             recreate();
-        });
-
-        settingRow(T.s("蒙版浓度"), sp.getInt("scrim", 30) + "%", () -> {
-            LinearLayout box = new LinearLayout(this);
-            box.setOrientation(LinearLayout.VERTICAL);
-            box.setPadding(dp(20), dp(14), dp(20), dp(4));
-
-            final TextView val = new TextView(this);
-            val.setText(sp.getInt("scrim", 30) + "%");
-            val.setTextColor(C_SUB);
-            val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-
-            SeekBar sb = new SeekBar(this);
-            sb.setMax(90);
-            sb.setProgress(sp.getInt("scrim", 30));
-            sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                @Override public void onProgressChanged(SeekBar s2, int p, boolean fromUser) {
-                    val.setText(p + "%");
-                }
-                @Override public void onStartTrackingTouch(SeekBar s2) { }
-                @Override public void onStopTrackingTouch(SeekBar s2) { }
-            });
-            box.addView(sb);
-            box.addView(val);
-
-            new AlertDialog.Builder(this)
-                    .setTitle(T.s("蒙版浓度"))
-                    .setMessage(T.s("数值越大，背景越暗，文字越清晰。"))
-                    .setView(box)
-                    .setPositiveButton(T.s("确定"), (d2, w2) -> {
-                        sp.edit().putInt("scrim", sb.getProgress()).apply();
-                        recreate();
-                    })
-                    .setNegativeButton(T.s("取消"), null)
-                    .show();
         });
 
         settingRow(T.s("曲线点数"), String.valueOf(sp.getInt("points", 60)), () -> {
@@ -1232,6 +1224,7 @@ public class MainActivity extends Activity {
     /* ================= 背景图 / 模糊 ================= */
 
     private static final int REQ_BG = 1001;
+    private static final int REQ_CROP = 1002;
 
     private void pickBackground() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -1249,30 +1242,94 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_BG && resultCode == RESULT_OK && data != null && data.getData() != null) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+
+        if (requestCode == REQ_BG) {
             Uri u = data.getData();
-            try {
-                getContentResolver().takePersistableUriPermission(
-                        u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (Throwable ignored) { }
-            sp.edit().putString("bgUri", u.toString()).apply();
+            if ("inapp".equals(sp.getString("cropMode", "inapp"))) {
+                // 交给应用内裁切界面
+                Intent i = new Intent(this, CropActivity.class);
+                i.setData(u);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try {
+                    startActivityForResult(i, REQ_CROP);
+                } catch (Throwable t) {
+                    saveBgFromUri(u);
+                }
+            } else {
+                saveBgFromUri(u);
+            }
+        } else if (requestCode == REQ_CROP) {
+            // CropActivity 已经把结果写到 files/bg.png
+            sp.edit().putBoolean("bgOn", true).apply();
             recreate();
         }
     }
 
-    /** 读图 → 裁成屏幕比例 → 生成模糊版（供卡片毛玻璃使用） */
-    private void prepareBackground() {
-        bgSharp = null;
-        blurredBg = null;
-        String uriStr = sp.getString("bgUri", null);
-        if (uriStr == null) return;
-        Bitmap bm = loadBg(Uri.parse(uriStr));
-        if (bm == null) return;
-        bgSharp = fitToScreen(bm);
-        if (sp.getBoolean("bgBlur", true)) blurredBg = blur(bgSharp);
+    /** 外部裁切：直接按屏幕比例居中裁切后落盘 */
+    private void saveBgFromUri(Uri u) {
+        toast(T.s("正在处理…"));
+        new Thread(() -> {
+            try {
+                Bitmap src = loadBg(u);
+                if (src == null) {
+                    ui.post(() -> toast(T.s("读取失败")));
+                    return;
+                }
+                Bitmap out = fitToScreen(src);
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(bgFile())) {
+                    out.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                }
+                sp.edit().putBoolean("bgOn", true).apply();
+                ui.post(this::recreate);
+            } catch (Throwable t) {
+                ui.post(() -> toast(T.s("导出失败") + t));
+            }
+        }, "saveBg").start();
     }
 
-    /** 把（清晰的）背景图挂到窗口，并叠加可调浓度的蒙版 */
+    /** 读本地背景图 → 裁成屏幕比例 → 需要时整张模糊 → 提取强调色 */
+    private void prepareBackground() {
+        bgSharp = null;
+        bgAccent = 0;
+        if (!hasBg()) return;
+        try {
+            Bitmap bm = BitmapFactory.decodeFile(bgFile().getAbsolutePath());
+            if (bm == null) return;
+            bm = fitToScreen(bm);
+            if (sp.getBoolean("bgBlur", true)) bm = blur(bm);
+            bgSharp = bm;
+            bgAccent = extractAccent(bm);
+        } catch (Throwable ignored) { }
+    }
+
+    /** 从背景图取一个高饱和度的种子色 */
+    private int extractAccent(Bitmap bm) {
+        try {
+            int w = 12, h = 12;
+            Bitmap tiny = Bitmap.createScaledBitmap(bm, w, h, true);
+            long r = 0, g = 0, b = 0;
+            int n = 0;
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int c = tiny.getPixel(x, y);
+                    r += (c >> 16) & 0xFF;
+                    g += (c >> 8) & 0xFF;
+                    b += c & 0xFF;
+                    n++;
+                }
+            }
+            tiny.recycle();
+            float[] hsv = new float[3];
+            android.graphics.Color.RGBToHSV((int) (r / n), (int) (g / n), (int) (b / n), hsv);
+            hsv[1] = Math.min(1f, hsv[1] * 1.6f + 0.35f);
+            hsv[2] = Math.max(0.62f, Math.min(0.92f, hsv[2] * 0.6f + 0.45f));
+            return android.graphics.Color.HSVToColor(hsv);
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
         if (bgSharp == null) {
@@ -1502,6 +1559,46 @@ public class MainActivity extends Activity {
         }
         tv.setPadding(dp(6), dp(14), dp(6), dp(6));
         settingsBox.addView(tv);
+    }
+
+    /** 带副标题的设置项 */
+    private void settingRowRaw(String title, String sub, String value, Runnable onClick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(11), dp(14), dp(11));
+        applyCardBg(row, dp(11), C_CARD);
+
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(C_TEXT);
+        left.addView(t);
+
+        if (sub != null && !sub.isEmpty()) {
+            TextView st = new TextView(this);
+            st.setText(sub);
+            st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            st.setTextColor(C_SUB);
+            st.setPadding(0, dp(2), 0, 0);
+            left.addView(st);
+        }
+        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        if (value != null && !value.isEmpty()) {
+            TextView v = new TextView(this);
+            v.setText(value);
+            v.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            v.setTextColor(C_CPU);
+            v.setPadding(dp(8), 0, 0, 0);
+            row.addView(v);
+        }
+
+        row.setOnClickListener(x -> onClick.run());
+        settingsBox.addView(row, lp(-1, -2, 0, 0, 0, dp(6)));
     }
 
     private void settingRow(String title, String value, Runnable onClick) {
@@ -2145,12 +2242,70 @@ public class MainActivity extends Activity {
         return backdropIsDark() ? 0xFFF2F2F2 : 0xFF141414;
     }
 
+    /** 开关型设置项（右侧显示 开/关） */
+    private void toggleRow(String title, String sub, String key, boolean def,
+                           String statusOverride, Runnable onEnable) {
+        boolean on = sp.getBoolean(key, def);
+        String val = statusOverride != null ? statusOverride : (on ? T.s("开") : T.s("关"));
+        settingRowRaw(title, sub, val, () -> {
+            boolean next = !sp.getBoolean(key, def);
+            sp.edit().putBoolean(key, next).apply();
+            if (next && onEnable != null) {
+                onEnable.run();
+                return;
+            }
+            if (!next && "bgOn".equals(key)) {
+                // 关掉背景：保留图片，仅不渲染
+            }
+            recreate();
+        });
+    }
+
+    /** 滑杆型设置项 */
+    private void sliderRow(String title, String key, int def, String hint) {
+        settingRow(title, sp.getInt(key, def) + "%", () -> {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(20), dp(14), dp(20), dp(4));
+            final TextView val = new TextView(this);
+            val.setText(sp.getInt(key, def) + "%");
+            val.setTextColor(C_SUB);
+            val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            SeekBar sb = new SeekBar(this);
+            sb.setMax(100);
+            sb.setProgress(sp.getInt(key, def));
+            sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar s2, int p, boolean fromUser) {
+                    val.setText(p + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar s2) { }
+                @Override public void onStopTrackingTouch(SeekBar s2) { }
+            });
+            box.addView(sb);
+            box.addView(val);
+            new AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(hint)
+                    .setView(box)
+                    .setPositiveButton(T.s("确定"), (d2, w2) -> {
+                        sp.edit().putInt(key, sb.getProgress()).apply();
+                        recreate();
+                    })
+                    .setNegativeButton(T.s("取消"), null)
+                    .show();
+        });
+    }
+
+    private File bgFile() {
+        return new File(getFilesDir(), "bg.png");
+    }
+
+    private boolean hasBg() {
+        return bgFile().exists() && sp.getBoolean("bgOn", true);
+    }
+
     private void applyCardBg(View v, float radius, int color) {
-        if (blurredBg != null) {
-            v.setBackground(new Frost(blurredBg, v, radius, color));
-        } else {
-            v.setBackground(round(color, radius));
-        }
+        v.setBackground(round(color, radius));
     }
 
     private GradientDrawable round(int color, float r) {
