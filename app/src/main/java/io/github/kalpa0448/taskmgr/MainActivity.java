@@ -342,6 +342,15 @@ public class MainActivity extends Activity {
         content.addView(pageProcess, new LinearLayout.LayoutParams(-1, -1));
         content.addView(pageDetails, new LinearLayout.LayoutParams(-1, -1));
         content.addView(pageSettings, new LinearLayout.LayoutParams(-1, -1));
+        // 滚动时重绘：毛玻璃要跟着卡片位置实时刷新
+        android.view.View.OnScrollChangeListener scroller = (v2, sx, sy, ox, oy) -> {
+            if (bgBlurred != null) v2.invalidate();
+        };
+        if (pageMonitor != null) pageMonitor.setOnScrollChangeListener(scroller);
+        if (pageProcess != null) pageProcess.setOnScrollChangeListener(scroller);
+        if (pageDetails != null) pageDetails.setOnScrollChangeListener(scroller);
+        if (pageSettings != null) pageSettings.setOnScrollChangeListener(scroller);
+
         syncChips();          // 启动时必须调一次，否则所有 chip 没有背景色
         applyBackground();
         switchTab(tab);
@@ -808,7 +817,7 @@ public class MainActivity extends Activity {
         search.setTextColor(C_TEXT);
         search.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         search.setSingleLine(true);
-        search.setBackground(round(C_CARD, dp(10)));
+        applyCardBg(search, dp(10), C_CARD);
         search.setPadding(dp(12), dp(8), dp(12), dp(8));
         search.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
@@ -859,7 +868,7 @@ public class MainActivity extends Activity {
         et.setTextColor(C_TEXT);
         et.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         et.setSingleLine(true);
-        et.setBackground(round(C_CARD, dp(10)));
+        applyCardBg(et, dp(10), C_CARD);
         et.setPadding(dp(12), dp(8), dp(12), dp(8));
         et.setText(keyword);
         et.addTextChangedListener(new TextWatcher() {
@@ -903,7 +912,7 @@ public class MainActivity extends Activity {
         // 表头
         LinearLayout head = new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setBackground(round(C_CARD2, dp(8)));
+        applyCardBg(head, dp(8), C_CARD2);
         head.addView(headCell(T.s("名称"), W_NAME, "name"));
         head.addView(headCell("PID", W_PID, "pid"));
         head.addView(headCell(T.s("状态"), W_STATE, null));
@@ -967,7 +976,7 @@ public class MainActivity extends Activity {
     private View detailRow(ProcCollector.Proc p, int idx) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setBackgroundColor(idx % 2 == 0 ? C_CARD : C_CARD2);
+        applyCardBg(row, dp(6), idx % 2 == 0 ? C_CARD : C_CARD2);
 
         TextView n = cell(p.name, W_NAME, p.pid == selfPid ? C_CPU : C_TEXT, 12, false);
         row.addView(n);
@@ -1389,8 +1398,8 @@ public class MainActivity extends Activity {
 
     private Bitmap blur(Bitmap src, int level) {
         try {
-            int div = Math.max(3, 36 / level);
-            int passes = 2 + level / 3;
+            int div = 6 + level * 4;        // 1→10  10→46（越大越糊）
+            int passes = 1 + level / 3;     // 1→1   10→4
             int w = Math.max(12, src.getWidth() / div);
             int h = Math.max(12, src.getHeight() / div);
             Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
@@ -1558,8 +1567,6 @@ public class MainActivity extends Activity {
         sectionTitle(T.s("效果"));
         switchRow(T.s("启用模糊"), T.s("仅对卡片区域做毛玻璃"), "bgBlur", true, null, on);
         inlineLevel(T.s("模糊强度"), "blurLevel", 5, on);
-        inlineSlider(T.s("卡片不透明度"), "cardAlpha", 55, on);
-        inlineSlider(T.s("背景暗度调节"), "scrim", 30, on);
         switchRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null, on);
         switchRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null, on);
 
@@ -2180,7 +2187,7 @@ public class MainActivity extends Activity {
         wrap.setOrientation(LinearLayout.HORIZONTAL);
         wrap.setGravity(Gravity.CENTER_VERTICAL);
         wrap.setPadding(dp(10), dp(8), dp(8), dp(8));
-        wrap.setBackground(round(depth == 0 ? C_CARD : C_CARD2, dp(10)));
+        applyCardBg(wrap, dp(10), depth == 0 ? C_CARD : C_CARD2);
 
         if (depth > 0) {
             View indent = new View(this);

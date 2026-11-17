@@ -10,6 +10,7 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.view.View;
+import android.view.ViewParent;
 
 /**
  * 卡片毛玻璃：只模糊卡片覆盖的那块区域，卡片之外保持清晰。
@@ -42,7 +43,7 @@ public class Frost extends Drawable {
         path.reset();
         path.addRoundRect(rect, radius, radius, Path.Direction.CW);
 
-        host.getLocationInWindow(loc);
+        windowPos(host, loc);
 
         int save = canvas.save();
         canvas.clipPath(path);
@@ -54,6 +55,22 @@ public class Frost extends Drawable {
         canvas.clipPath(path);
         canvas.drawRect(rect, tintPaint);
         canvas.restoreToCount(save2);
+    }
+
+    /** 逐级累加 left/top 与滚动量，得到相对窗口的稳定坐标 */
+    private static void windowPos(View v, int[] out) {
+        int x = 0, y = 0;
+        View cur = v;
+        while (cur != null) {
+            x += cur.getLeft() - cur.getScrollX();
+            y += cur.getTop() - cur.getScrollY();
+            ViewParent p = cur.getParent();
+            cur = (p instanceof View) ? (View) p : null;
+        }
+        int[] root = new int[2];
+        v.getRootView().getLocationInWindow(root);
+        out[0] = x + root[0];
+        out[1] = y + root[1];
     }
 
     @Override
