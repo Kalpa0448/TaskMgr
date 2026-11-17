@@ -100,6 +100,8 @@ public class FrostScrollView extends ScrollView {
             if (tag instanceof Float && v.getWidth() > 0 && v.getHeight() > 0) {
                 node.set(0, 0, v.getWidth(), v.getHeight());
                 host.offsetDescendantRectToMyCoords(v, node);
+                // 背景层的画布本身带 -scrollY 平移，这里补回来才与卡片对齐
+                node.offset(0, host.getScrollY());
                 if (node.bottom > 0 && node.top < host.getHeight()
                         && node.right > 0 && node.left < host.getWidth()) {
                     rect.set(node);
