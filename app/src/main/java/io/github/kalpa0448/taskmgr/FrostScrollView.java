@@ -86,7 +86,9 @@ public class FrostScrollView extends ScrollView {
         public void draw(Canvas canvas) {
             // 背景层画布没有滚动偏移，直接用视口坐标即可
             host.getLocationInWindow(loc);
-            matrix.setTranslate(-loc[0], -loc[1]);
+            // 关键：纵向额外加上 scrollY
+            // → 取样锚点跟着内容一起走，卡片和模糊是一体的（而不是钉在屏幕上）
+            matrix.setTranslate(-loc[0], -loc[1] + host.getScrollY());
             shader.setLocalMatrix(matrix);
 
             View content = host.getChildAt(0);

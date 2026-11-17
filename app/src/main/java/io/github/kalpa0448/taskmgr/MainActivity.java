@@ -1322,7 +1322,7 @@ public class MainActivity extends Activity {
     private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
         boolean pageMode = sp.getBoolean("frostPage", false) && bgBlurred != null;
-        boolean frost = (bgBlurred != null) && !pageMode;
+        boolean frost = false;   // 毛玻璃改为逐卡片 Drawable，背景层不再绘制
         if (pageMode) {
             BitmapDrawable bd2 = new BitmapDrawable(getResources(), bgBlurred);
             bd2.setGravity(android.view.Gravity.FILL);
@@ -2665,9 +2665,11 @@ public class MainActivity extends Activity {
     }
 
     private void applyCardBg(View v, float radius, int color) {
-        v.setBackground(round(color, radius));
-        // 标记给 FrostScrollView，由它统一绘制毛玻璃
-        v.setTag(FrostScrollView.TAG_FROST, radius);
+        if (bgBlurred != null && !sp.getBoolean("frostPage", false)) {
+            v.setBackground(new Frost(bgBlurred, v, radius, color));
+        } else {
+            v.setBackground(round(color, radius));
+        }
     }
 
     private GradientDrawable round(int color, float r) {
