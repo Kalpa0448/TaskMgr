@@ -16,6 +16,7 @@ public class Sparkline2 extends View {
     private int head = 0;
     private int count = 0;
     private int maxPoints;
+    private float displayMax = 64 * 1024f;   // 平滑后的量程，避免曲线跳变
 
     private final Paint lineA = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint lineB = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -60,7 +61,7 @@ public class Sparkline2 extends View {
     }
 
     private static float clamp(float v) {
-        return Math.max(0, Math.min(100, v));
+        return Math.max(0f, v);
     }
 
     public void setMaxPoints(int n) {
@@ -90,8 +91,16 @@ public class Sparkline2 extends View {
         float stepX = (float) w / (cap - 1);
         int start = (head - drawN + cap) % cap;
 
-        build(pathA, areaA, a, start, drawN, cap, stepX, w, h);
-        build(pathB, areaB, b, start, drawN, cap, stepX, w, h);
+        // 自动量程：取窗口内两条序列的最大值，向下平滑，最小 64 KB/s
+        float peak = 64 * 1024f;
+        for (int i = 0; i < drawN; i++) {
+            peak = Math.max(peak, Math.max(a[(start + i) % cap], b[(start + i) % cap]));
+        }
+        displayMax = Math.max(peak, displayMax * 0.90f);
+        float range = Math.max(displayMax, 1f);
+
+        build(pathA, areaA, a, start, drawN, cap, stepX, w, h, range);
+        build(pathB, areaB, b, start, drawN, cap, stepX, w, h, range);
 
         c.drawPath(areaA, fillA);
         c.drawPath(areaB, fillB);
@@ -100,14 +109,14 @@ public class Sparkline2 extends View {
     }
 
     private void build(Path line, Path area, float[] data, int start, int drawN,
-                       int cap, float stepX, int w, int h) {
+                       int cap, float stepX, int w, int h, float range) {
         line.reset();
         area.reset();
         boolean first = true;
         for (int i = 0; i < drawN; i++) {
             float v = data[(start + i) % cap];
             float x = w - (drawN - 1 - i) * stepX;
-            float y = h - (v / 100f) * h;
+            float y = h - Math.min(1f, v / range) * h;
             if (first) {
                 line.moveTo(x, y);
                 area.moveTo(x, h);

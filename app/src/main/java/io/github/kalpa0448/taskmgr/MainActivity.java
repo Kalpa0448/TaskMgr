@@ -401,6 +401,7 @@ public class MainActivity extends Activity {
         box.setPadding(0, 0, 0, dp(24));
 
         LinearLayout cpuCard = card();
+        cardTitle(cpuCard, "CPU");
         LinearLayout r1 = new LinearLayout(this);
         r1.setOrientation(LinearLayout.HORIZONTAL);
         r1.setGravity(Gravity.CENTER_VERTICAL);
@@ -458,6 +459,7 @@ public class MainActivity extends Activity {
         box.addView(cpuCard, lp(-1, -2, 0, 0, 0, dp(10)));
 
         LinearLayout memCard = card();
+        cardTitle(memCard, "内存");
         LinearLayout r2 = new LinearLayout(this);
         r2.setOrientation(LinearLayout.HORIZONTAL);
         r2.setGravity(Gravity.CENTER_VERTICAL);
@@ -495,6 +497,7 @@ public class MainActivity extends Activity {
 
         // ---- 磁盘 ----
         LinearLayout diskCard = card();
+        cardTitle(diskCard, "磁盘");
         tvDisk = new TextView(this);
         tvDisk.setText("—");
         tvDisk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -513,6 +516,7 @@ public class MainActivity extends Activity {
 
         // ---- 网络 ----
         LinearLayout netCard = card();
+        cardTitle(netCard, "网络");
         tvNet = new TextView(this);
         tvNet.setText("—");
         tvNet.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
@@ -2033,6 +2037,18 @@ public class MainActivity extends Activity {
     }
 
     /** 一段文字分两种颜色（读/写、下行/上行） */
+    /** 卡片标题 */
+    private TextView cardTitle(LinearLayout card, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        tv.setTypeface(Typeface.DEFAULT_BOLD);
+        tv.setTextColor(C_SUB);
+        tv.setPadding(0, 0, 0, dp(8));
+        card.addView(tv);
+        return tv;
+    }
+
     private static android.text.SpannableString twoColor(
             String t1, int c1, String t2, int c2) {
         android.text.SpannableString ss = new android.text.SpannableString(t1 + t2);
@@ -2106,11 +2122,11 @@ public class MainActivity extends Activity {
                     s.netRxTotal / 1073741824.0, s.netTxTotal / 1073741824.0));
 
             if (sparkDisk != null) {
-                sparkDisk.push2(diskOk ? normRate(s.diskReadBps) : 0,
-                        diskOk ? normRate(s.diskWriteBps) : 0);
+                sparkDisk.push2(diskOk ? (float) s.diskReadBps : 0f,
+                        diskOk ? (float) s.diskWriteBps : 0f);
             }
             if (sparkNet != null) {
-                sparkNet.push2(normRate(s.netRxBps), normRate(s.netTxBps));
+                sparkNet.push2((float) s.netRxBps, (float) s.netTxBps);
             }
         }
         ProcCollector.MemInfo m = s.mem;
@@ -2448,11 +2464,11 @@ public class MainActivity extends Activity {
                     s.netRxTotal / 1073741824.0, s.netTxTotal / 1073741824.0));
 
             if (sparkDisk != null) {
-                sparkDisk.push2(diskOk ? normRate(s.diskReadBps) : 0,
-                        diskOk ? normRate(s.diskWriteBps) : 0);
+                sparkDisk.push2(diskOk ? (float) s.diskReadBps : 0f,
+                        diskOk ? (float) s.diskWriteBps : 0f);
             }
             if (sparkNet != null) {
-                sparkNet.push2(normRate(s.netRxBps), normRate(s.netTxBps));
+                sparkNet.push2((float) s.netRxBps, (float) s.netTxBps);
             }
         }
         ProcCollector.MemInfo m = s.mem;
