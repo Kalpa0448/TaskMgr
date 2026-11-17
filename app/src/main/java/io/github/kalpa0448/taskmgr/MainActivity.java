@@ -15,6 +15,8 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.provider.MediaStore;
@@ -39,6 +41,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -81,6 +84,8 @@ public class MainActivity extends Activity {
     private String accentMode = "default"; // default=固定蓝 / monet=壁纸取色
     private String darkMode   = "auto";    // auto=跟随系统 / light / dark
     private ScrollView rootScroll;
+    private Bitmap bgSharp;     // 背景原图（按屏幕裁切）
+    private Bitmap blurredBg;   // 卡片毛玻璃用的整屏模糊图
     private final Map<Integer, String> labelCache = new HashMap<>();
     private TextView tvCpu, tvCpuSub, tvMem, tvMemSub, tvSwap, tvProc, tvStatus, tvModeHint, tvTemp;
     private View barCpu, barMem;
@@ -135,6 +140,7 @@ public class MainActivity extends Activity {
         setTheme(darkNow ? android.R.style.Theme_DeviceDefault_NoActionBar
                 : android.R.style.Theme_DeviceDefault_Light_NoActionBar);
         applyTheme();
+        prepareBackground();   // 必须在 build() 之前：卡片创建时要拿到模糊图
         sortBy = sp.getString("sort", "cpu");
         filterMode = sp.getString("filter", "all");
         cpuMode = sp.getString("cpuMode", "agg");
@@ -236,11 +242,13 @@ public class MainActivity extends Activity {
         C_SWAP = dark ? 0xFFFFB74D : 0xFFEF6C00;
         C_DANGER_BG = dark ? 0xFF43262A : 0xFFFBE4E4;
 
-        // 设了自定义背景图 → 卡片半透明，露出模糊背景
+        // 设了自定义背景图 → 卡片半透明
         if (sp.getString("bgUri", null) != null) {
-            C_CARD = withAlpha(C_CARD, 0xE2);
-            C_CARD2 = withAlpha(C_CARD2, 0xCF);
-            C_CHIP = withAlpha(C_CHIP, 0xE2);
+            boolean frost = sp.getBoolean("bgBlur", true);
+            int a = frost ? (dark ? 0x9E : 0xB8) : 0xE2;
+            C_CARD = withAlpha(C_CARD, a);
+            C_CARD2 = withAlpha(C_CARD2, Math.min(0xFF, a + 0x24));
+            C_CHIP = withAlpha(C_CHIP, a);
         }
 
         try {
@@ -268,7 +276,10 @@ public class MainActivity extends Activity {
         t.setText(T.s("任务管理器"));
         t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
         t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setTextColor(C_TEXT);
+        t.setTextColor(onBackdropText(C_TEXT));
+        if (bgSharp != null) {
+            t.setShadowLayer(4f, 0f, 1f, backdropIsDark() ? 0x99000000 : 0x55FFFFFF);
+        }
         root.addView(t);
 
         tvStatus = new TextView(this);
@@ -1055,10 +1066,45 @@ public class MainActivity extends Activity {
             });
         }
 
-        settingRow(T.s("卡片模糊"), sp.getBoolean("bgBlur", true) ? T.s("开") : T.s("关"), () -> {
+        settingRow(T.s("卡片毛玻璃"), sp.getBoolean("bgBlur", true) ? T.s("开") : T.s("关"), () -> {
             boolean v = !sp.getBoolean("bgBlur", true);
             sp.edit().putBoolean("bgBlur", v).apply();
             recreate();
+        });
+
+        settingRow(T.s("蒙版浓度"), sp.getInt("scrim", 30) + "%", () -> {
+            LinearLayout box = new LinearLayout(this);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(20), dp(14), dp(20), dp(4));
+
+            final TextView val = new TextView(this);
+            val.setText(sp.getInt("scrim", 30) + "%");
+            val.setTextColor(C_SUB);
+            val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+
+            SeekBar sb = new SeekBar(this);
+            sb.setMax(90);
+            sb.setProgress(sp.getInt("scrim", 30));
+            sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override public void onProgressChanged(SeekBar s2, int p, boolean fromUser) {
+                    val.setText(p + "%");
+                }
+                @Override public void onStartTrackingTouch(SeekBar s2) { }
+                @Override public void onStopTrackingTouch(SeekBar s2) { }
+            });
+            box.addView(sb);
+            box.addView(val);
+
+            new AlertDialog.Builder(this)
+                    .setTitle(T.s("蒙版浓度"))
+                    .setMessage(T.s("数值越大，背景越暗，文字越清晰。"))
+                    .setView(box)
+                    .setPositiveButton(T.s("确定"), (d2, w2) -> {
+                        sp.edit().putInt("scrim", sb.getProgress()).apply();
+                        recreate();
+                    })
+                    .setNegativeButton(T.s("取消"), null)
+                    .show();
         });
 
         settingRow(T.s("曲线点数"), String.valueOf(sp.getInt("points", 60)), () -> {
@@ -1214,26 +1260,42 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void applyBackground() {
+    /** 读图 → 裁成屏幕比例 → 生成模糊版（供卡片毛玻璃使用） */
+    private void prepareBackground() {
+        bgSharp = null;
+        blurredBg = null;
         String uriStr = sp.getString("bgUri", null);
-        Bitmap bm = null;
-        if (uriStr != null) {
-            bm = loadBg(Uri.parse(uriStr));
-            if (bm != null) {
-                bm = fitToScreen(bm);
-                if (sp.getBoolean("bgBlur", true)) bm = blur(bm);
-            }
-        }
+        if (uriStr == null) return;
+        Bitmap bm = loadBg(Uri.parse(uriStr));
+        if (bm == null) return;
+        bgSharp = fitToScreen(bm);
+        if (sp.getBoolean("bgBlur", true)) blurredBg = blur(bgSharp);
+    }
+
+    /** 把（清晰的）背景图挂到窗口，并叠加可调浓度的蒙版 */
+    private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
-        if (bm == null) {
+        if (bgSharp == null) {
             getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
             for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
-        } else {
-            BitmapDrawable bd = new BitmapDrawable(getResources(), bm);
-            bd.setGravity(android.view.Gravity.FILL);
-            getWindow().setBackgroundDrawable(bd);
-            for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
+            return;
         }
+        BitmapDrawable bd = new BitmapDrawable(getResources(), bgSharp);
+        bd.setGravity(android.view.Gravity.FILL);
+        int scrim = scrimColor();
+        Drawable bg = scrim == 0
+                ? bd
+                : new LayerDrawable(new Drawable[]{bd, new ColorDrawable(scrim)});
+        getWindow().setBackgroundDrawable(bg);
+        for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
+    }
+
+    /** 蒙版浓度 0~90% → 黑色 alpha */
+    private int scrimColor() {
+        int pct = sp.getInt("scrim", 30);
+        if (pct <= 0) return 0;
+        int a = Math.min(230, pct * 255 / 100);
+        return a << 24;
     }
 
     private Bitmap loadBg(Uri uri) {
@@ -1430,11 +1492,11 @@ public class MainActivity extends Activity {
         tv.setText(s);
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        if (sp.getString("bgUri", null) != null) {
-            // 有背景图时提高对比度，否则分组标题会糊在背景里
-            boolean dark = isDarkMode();
-            tv.setTextColor(C_TEXT);
-            tv.setShadowLayer(3f, 0f, 1f, dark ? 0xB3000000 : 0x66FFFFFF);
+        if (bgSharp != null) {
+            // 浮在背景图上：按背景明暗自动选深/浅文字
+            boolean onDark = backdropIsDark();
+            tv.setTextColor(onDark ? 0xFFEFEFEF : 0xFF141414);
+            tv.setShadowLayer(3.5f, 0f, 1f, onDark ? 0xB3000000 : 0x66FFFFFF);
         } else {
             tv.setTextColor(C_SUB);
         }
@@ -1447,7 +1509,7 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(13), dp(14), dp(13));
-        row.setBackground(round(C_CARD, dp(11)));
+        applyCardBg(row, dp(11), C_CARD);
 
         TextView t = new TextView(this);
         t.setText(title);
@@ -1976,7 +2038,7 @@ public class MainActivity extends Activity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(16), dp(14), dp(16), dp(14));
-        c.setBackground(round(C_CARD, dp(14)));
+        applyCardBg(c, dp(14), C_CARD);
         return c;
     }
 
@@ -2069,6 +2131,26 @@ public class MainActivity extends Activity {
         tv.setTextColor(C_WARN);
         tv.setPadding(dp(4), dp(12), dp(4), dp(12));
         return tv;
+    }
+
+    /** 卡片背景：有模糊图就上毛玻璃，否则普通圆角色块 */
+    /** 背景压得够暗时，浮在背景上的文字要改成浅色 */
+    private boolean backdropIsDark() {
+        if (bgSharp == null) return isDarkMode();
+        return isDarkMode() || sp.getInt("scrim", 30) >= 40;
+    }
+
+    private int onBackdropText(int normal) {
+        if (bgSharp == null) return normal;
+        return backdropIsDark() ? 0xFFF2F2F2 : 0xFF141414;
+    }
+
+    private void applyCardBg(View v, float radius, int color) {
+        if (blurredBg != null) {
+            v.setBackground(new Frost(blurredBg, v, radius, color));
+        } else {
+            v.setBackground(round(color, radius));
+        }
     }
 
     private GradientDrawable round(int color, float r) {

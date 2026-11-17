@@ -146,6 +146,10 @@ public final class T {
         put("莫奈取色", "Monet colors");
         put("背景图片", "Background image");
         put("卡片模糊", "Blur cards");
+        put("卡片毛玻璃", "Frosted cards");
+        put("蒙版浓度", "Backdrop dim");
+        put("数值越大，背景越暗，文字越清晰。", "Higher value = darker backdrop, clearer text.");
+        put("确定", "OK");
         put("曲线点数", "Chart points");
         put("曲线点数（个）", "Chart points");
         put("刷新", "Refresh");
