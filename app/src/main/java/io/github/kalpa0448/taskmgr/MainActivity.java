@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
 
     /* 视图 */
     private LinearLayout content, list, coreBox, settingsBox;
-    private ScrollView pageMonitor, pageProcess, pageDetails, pageSettings;
+    private FrostScrollView pageMonitor, pageProcess, pageDetails, pageSettings;
     private TextView tabMonitor, tabProcess, tabDetails, tabSettings;
     private LinearLayout detailList;
     private String detailSort = "cpu";
@@ -342,15 +342,6 @@ public class MainActivity extends Activity {
         content.addView(pageProcess, new LinearLayout.LayoutParams(-1, -1));
         content.addView(pageDetails, new LinearLayout.LayoutParams(-1, -1));
         content.addView(pageSettings, new LinearLayout.LayoutParams(-1, -1));
-        // 滚动时重绘：毛玻璃要跟着卡片位置实时刷新
-        android.view.View.OnScrollChangeListener scroller = (v2, sx, sy, ox, oy) -> {
-            if (bgBlurred != null) v2.invalidate();
-        };
-        if (pageMonitor != null) pageMonitor.setOnScrollChangeListener(scroller);
-        if (pageProcess != null) pageProcess.setOnScrollChangeListener(scroller);
-        if (pageDetails != null) pageDetails.setOnScrollChangeListener(scroller);
-        if (pageSettings != null) pageSettings.setOnScrollChangeListener(scroller);
-
         syncChips();          // 启动时必须调一次，否则所有 chip 没有背景色
         applyBackground();
         switchTab(tab);
@@ -399,8 +390,8 @@ public class MainActivity extends Activity {
 
     /* ================= 监控页 ================= */
 
-    private ScrollView buildMonitor() {
-        ScrollView sc = new ScrollView(this);
+    private FrostScrollView buildMonitor() {
+        FrostScrollView sc = new FrostScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, 0, 0, dp(24));
@@ -775,8 +766,8 @@ public class MainActivity extends Activity {
 
     /* ================= 进程页 ================= */
 
-    private ScrollView buildProcess() {
-        ScrollView sc = new ScrollView(this);
+    private FrostScrollView buildProcess() {
+        FrostScrollView sc = new FrostScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, 0, 0, dp(24));
@@ -843,8 +834,8 @@ public class MainActivity extends Activity {
     private static final int W_NAME = 108, W_PID = 44, W_STATE = 50, W_USER = 74,
             W_CPU = 44, W_MEM = 46, W_ARCH = 36;
 
-    private ScrollView buildDetails() {
-        ScrollView sc = new ScrollView(this);
+    private FrostScrollView buildDetails() {
+        FrostScrollView sc = new FrostScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, 0, 0, dp(20));
@@ -1036,8 +1027,8 @@ public class MainActivity extends Activity {
         return label;
     }
 
-    private ScrollView buildSettings() {
-        ScrollView sc = new ScrollView(this);
+    private FrostScrollView buildSettings() {
+        FrostScrollView sc = new FrostScrollView(this);
         settingsBox = new LinearLayout(this);
         settingsBox.setOrientation(LinearLayout.VERTICAL);
         settingsBox.setPadding(0, 0, 0, dp(24));
@@ -1330,6 +1321,9 @@ public class MainActivity extends Activity {
 
     private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
+        for (ScrollView v : pages) {
+            if (v instanceof FrostScrollView) ((FrostScrollView) v).setBackdrop(bgBlurred);
+        }
         if (bgSharp == null) {
             getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
             for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
@@ -2640,6 +2634,8 @@ public class MainActivity extends Activity {
         return bgFile().exists();
     }
 
+
+
     /** 高对比度模式：给整棵树上的文字加阴影 */
     private void applyTextShadow(View v) {
         if (!sp.getBoolean("highContrast", false)) return;
@@ -2652,11 +2648,9 @@ public class MainActivity extends Activity {
     }
 
     private void applyCardBg(View v, float radius, int color) {
-        if (bgBlurred != null) {
-            v.setBackground(new Frost(bgBlurred, v, radius, color));
-        } else {
-            v.setBackground(round(color, radius));
-        }
+        v.setBackground(round(color, radius));
+        // 标记给 FrostScrollView，由它统一绘制毛玻璃
+        v.setTag(FrostScrollView.TAG_FROST, radius);
     }
 
     private GradientDrawable round(int color, float r) {
