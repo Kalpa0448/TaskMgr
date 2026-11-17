@@ -9,10 +9,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -33,6 +35,8 @@ fun GlassCard(
     tint: Color,
     corner: Dp = 20.dp,
     modifier: Modifier = Modifier,
+    dstW: Int = 0,
+    dstH: Int = 0,
     content: @Composable ColumnScope.() -> Unit
 ) {
     var pos by remember { mutableStateOf(IntOffset.Zero) }
@@ -41,14 +45,21 @@ fun GlassCard(
         modifier = modifier
             .clip(RoundedCornerShape(corner))
             .onGloballyPositioned { c ->
-                val p = c.positionInWindow()
+                val p = c.positionInRoot()
                 pos = IntOffset(p.x.roundToInt(), p.y.roundToInt())
             }
             .drawBehind {
                 if (blur != null) {
+                    // 显式指定像素尺寸，避免按 bitmap 密度缩放
+                    val tw = if (dstW > 0) dstW else blur.width
+                    val th = if (dstH > 0) dstH else blur.height
                     drawImage(
                         image = blur,
-                        topLeft = Offset(-pos.x.toFloat(), -pos.y.toFloat())
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(blur.width, blur.height),
+                        dstOffset = IntOffset(-pos.x, -pos.y),
+                        dstSize = IntSize(tw, th),
+                        filterQuality = FilterQuality.Low
                     )
                 }
                 drawRect(tint)
@@ -64,6 +75,8 @@ fun GlassRow(
     tint: Color,
     corner: Dp = 14.dp,
     modifier: Modifier = Modifier,
+    dstW: Int = 0,
+    dstH: Int = 0,
     content: @Composable RowScope.() -> Unit
 ) {
     var pos by remember { mutableStateOf(IntOffset.Zero) }
@@ -73,14 +86,21 @@ fun GlassRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(corner))
             .onGloballyPositioned { c ->
-                val p = c.positionInWindow()
+                val p = c.positionInRoot()
                 pos = IntOffset(p.x.roundToInt(), p.y.roundToInt())
             }
             .drawBehind {
                 if (blur != null) {
+                    // 显式指定像素尺寸，避免按 bitmap 密度缩放
+                    val tw = if (dstW > 0) dstW else blur.width
+                    val th = if (dstH > 0) dstH else blur.height
                     drawImage(
                         image = blur,
-                        topLeft = Offset(-pos.x.toFloat(), -pos.y.toFloat())
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(blur.width, blur.height),
+                        dstOffset = IntOffset(-pos.x, -pos.y),
+                        dstSize = IntSize(tw, th),
+                        filterQuality = FilterQuality.Low
                     )
                 }
                 drawRect(tint)

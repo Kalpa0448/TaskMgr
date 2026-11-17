@@ -35,14 +35,24 @@ fun AppRoot(theme: ThemeState) {
         }
     }
 
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val dens = androidx.compose.ui.platform.LocalDensity.current
+    val winW = with(dens) { cfg.screenWidthDp.dp.roundToPx() }
+    val winH = with(dens) { cfg.screenHeightDp.dp.roundToPx() }
+
     Box(Modifier.fillMaxSize().background(theme.bgColor)) {
         // 背景图（清晰）
         theme.bg?.let { b ->
-            androidx.compose.foundation.Image(
-                bitmap = b, contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
+            androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+                drawImage(
+                    image = b,
+                    srcOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                    srcSize = androidx.compose.ui.unit.IntSize(b.width, b.height),
+                    dstOffset = androidx.compose.ui.unit.IntOffset.Zero,
+                    dstSize = androidx.compose.ui.unit.IntSize(winW, winH),
+                    filterQuality = androidx.compose.ui.graphics.FilterQuality.Low
+                )
+            }
         }
         // 暗度蒙版
         if (theme.scrim > 0f) {
@@ -107,8 +117,19 @@ private fun Tabs(theme: ThemeState, current: Int, onChange: (Int) -> Unit) {
 
 /* ---------------- 概览 ---------------- */
 
+
+@Composable
+private fun winSize(): Pair<Int, Int> {
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val dens = androidx.compose.ui.platform.LocalDensity.current
+    return with(dens) {
+        cfg.screenWidthDp.dp.roundToPx() to cfg.screenHeightDp.dp.roundToPx()
+    }
+}
+
 @Composable
 private fun OverviewScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
+    val (winW, winH) = winSize()
     if (s == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("正在采集…", color = theme.subColor)
@@ -120,7 +141,7 @@ private fun OverviewScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
 
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth()) {
+            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth(), dstW = winW, dstH = winH) {
                 Column(Modifier.padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(format("%.1f%%", s.cpuPercent), color = theme.accent,
@@ -145,7 +166,7 @@ private fun OverviewScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
             }
         }
         item {
-            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth()) {
+            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth(), dstW = winW, dstH = winH) {
                 Column(Modifier.padding(18.dp)) {
                     Text(
                         "${format("%.1f", m.used() / 1073741824.0)} / ${format("%.1f", m.memTotal / 1073741824.0)} GB",
@@ -169,7 +190,7 @@ private fun OverviewScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
             }
         }
         item {
-            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth()) {
+            GlassCard(theme.bgBlur, theme.cardTint(), 20.dp, Modifier.fillMaxWidth(), dstW = winW, dstH = winH) {
                 Column(Modifier.padding(18.dp)) {
                     Text("设备信息", color = theme.subColor, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(10.dp))
@@ -188,18 +209,19 @@ private fun OverviewScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
 
 @Composable
 private fun ProcessScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
+    val (winW, winH) = winSize()
     if (s == null) return
     val procs = s.procs.filter { it.name.isNotEmpty() }.take(60)
     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
-            GlassRow(theme.bgBlur, theme.cardTint().copy(alpha = 0.35f),
+            GlassRow(theme.bgBlur, theme.cardTint().copy(alpha = 0.35f), dstW = winW, dstH = winH,
                 modifier = Modifier.padding(bottom = 4.dp)) {
                 Text("  共 ${s.procs.size} 个进程", color = theme.subColor,
                     fontSize = 12.sp, modifier = Modifier.padding(12.dp))
             }
         }
         items(procs) { p ->
-            GlassRow(theme.bgBlur, theme.cardTint()) {
+            GlassRow(theme.bgBlur, theme.cardTint(), dstW = winW, dstH = winH) {
                 Column(Modifier.weight(1f).padding(12.dp)) {
                     Text(p.name, color = theme.textColor, fontSize = 14.sp)
                     Text("PID ${p.pid} · ${ProcCollector.userName(p.uid)}",
@@ -219,11 +241,12 @@ private fun ProcessScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
 
 @Composable
 private fun DetailsScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
+    val (winW, winH) = winSize()
     if (s == null) return
     val procs = s.procs.sortedByDescending { it.cpu }.take(40)
     LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item {
-            GlassRow(theme.bgBlur, theme.cardTint().copy(alpha = 0.45f)) {
+            GlassRow(theme.bgBlur, theme.cardTint().copy(alpha = 0.45f), dstW = winW, dstH = winH) {
                 Text("名称", color = theme.subColor, fontSize = 12.sp,
                     modifier = Modifier.weight(1f).padding(10.dp))
                 Text("PID", color = theme.subColor, fontSize = 12.sp, modifier = Modifier.width(60.dp))
@@ -233,7 +256,7 @@ private fun DetailsScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
             }
         }
         items(procs) { p ->
-            GlassRow(theme.bgBlur, theme.cardTint(alt = true)) {
+            GlassRow(theme.bgBlur, theme.cardTint(alt = true), dstW = winW, dstH = winH) {
                 Text(p.name, color = theme.textColor, fontSize = 12.sp,
                     modifier = Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp))
                 Text("${p.pid}", color = theme.subColor, fontSize = 11.sp, modifier = Modifier.width(60.dp))
@@ -250,6 +273,7 @@ private fun DetailsScreen(theme: ThemeState, s: ProcCollector.Snapshot?) {
 
 @Composable
 private fun SettingsScreen(theme: ThemeState) {
+    val (winW, winH) = winSize()
     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item { SectionTitle(theme, "外观") }
         item { SettingRow(theme, "主题配色", "默认") }
@@ -271,7 +295,8 @@ private fun SectionTitle(theme: ThemeState, text: String) {
 
 @Composable
 private fun SettingRow(theme: ThemeState, title: String, value: String) {
-    GlassRow(theme.bgBlur, theme.cardTint()) {
+    val (winW, winH) = winSize()
+    GlassRow(theme.bgBlur, theme.cardTint(), dstW = winW, dstH = winH) {
         Text(title, color = theme.textColor, fontSize = 14.sp,
             modifier = Modifier.weight(1f).padding(14.dp))
         Text(value, color = theme.accent, fontSize = 13.sp,

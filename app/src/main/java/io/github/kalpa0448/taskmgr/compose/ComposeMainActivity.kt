@@ -11,7 +11,7 @@ class ComposeMainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         val sp = getSharedPreferences("tm", MODE_PRIVATE)
         val theme = ThemeState(sp)

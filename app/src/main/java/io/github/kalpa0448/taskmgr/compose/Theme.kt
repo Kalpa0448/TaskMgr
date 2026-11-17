@@ -23,6 +23,8 @@ class ThemeState(val sp: SharedPreferences) {
     var scrim by mutableStateOf(0.30f)
     var blurLevel by mutableStateOf(5)
     var bgSeed by mutableStateOf(true)
+    var winW by mutableStateOf(0)
+    var winH by mutableStateOf(0)
 
     // 调色板
     var bgColor by mutableStateOf(Color(0xFF101012))
@@ -54,8 +56,10 @@ class ThemeState(val sp: SharedPreferences) {
         if (f.exists()) {
             val raw = BitmapFactory.decodeFile(f.absolutePath)
             if (raw != null) {
-                val fitted = fitToScreen(ctx, raw)
+                val fitted = raw
+                android.util.Log.d("TaskMgr", "bg decoded=${raw.width}x${raw.height} fitted=${fitted.width}x${fitted.height} screen=${ctx.resources.displayMetrics.widthPixels}x${ctx.resources.displayMetrics.heightPixels} density=${ctx.resources.displayMetrics.density}")
                 bg = fitted.asImageBitmap()
+                winW = fitted.width; winH = fitted.height
                 luma = averageLuma(fitted)
                 bgBlur = blur(fitted, blurLevel)?.asImageBitmap()
             }
@@ -146,17 +150,69 @@ class ThemeState(val sp: SharedPreferences) {
     }
 }
 
-/** 降采样 + 放大 = 快速模糊 */
+/**
+ * 高质量模糊：缩到 1/4 → 3 次可分离盒式模糊 → 放大。
+ * 不会像"缩到极小再放大"那样出大色块。
+ */
 fun blur(src: Bitmap, level: Int): Bitmap? = try {
-    val div = 6 + level * 4
-    val w = maxOf(8, src.width / div)
-    val h = maxOf(8, src.height / div)
+    val w = maxOf(16, src.width / 4)
+    val h = maxOf(16, src.height / 4)
     val small = Bitmap.createScaledBitmap(src, w, h, true)
+    val px = IntArray(w * h)
+    small.getPixels(px, 0, w, 0, 0, w, h)
+
+    val radius = maxOf(1, level * 2)
+    var buf = px
+    repeat(3) { buf = boxBlur(buf, w, h, radius) }
+
+    small.setPixels(buf, 0, w, 0, 0, w, h)
     val out = Bitmap.createScaledBitmap(small, src.width, src.height, true)
     if (small != out) small.recycle()
     out
 } catch (t: Throwable) {
     null
+}
+
+/** 可分离盒式模糊，滑动窗口 O(n) */
+private fun boxBlur(src: IntArray, w: Int, h: Int, r: Int): IntArray {
+    val tmp = IntArray(src.size)
+    val out = IntArray(src.size)
+    val span = 2 * r + 1
+
+    for (y in 0 until h) {
+        val base = y * w
+        var a = 0; var rr = 0; var gg = 0; var bb = 0
+        for (k in -r..r) {
+            val c = src[base + k.coerceIn(0, w - 1)]
+            a += c ushr 24; rr += (c shr 16) and 0xFF; gg += (c shr 8) and 0xFF; bb += c and 0xFF
+        }
+        for (x in 0 until w) {
+            tmp[base + x] = ((a / span) shl 24) or ((rr / span) shl 16) or ((gg / span) shl 8) or (bb / span)
+            val co = src[base + (x - r).coerceIn(0, w - 1)]
+            val ci = src[base + (x + r + 1).coerceIn(0, w - 1)]
+            a += (ci ushr 24) - (co ushr 24)
+            rr += ((ci shr 16) and 0xFF) - ((co shr 16) and 0xFF)
+            gg += ((ci shr 8) and 0xFF) - ((co shr 8) and 0xFF)
+            bb += (ci and 0xFF) - (co and 0xFF)
+        }
+    }
+    for (x in 0 until w) {
+        var a = 0; var rr = 0; var gg = 0; var bb = 0
+        for (k in -r..r) {
+            val c = tmp[k.coerceIn(0, h - 1) * w + x]
+            a += c ushr 24; rr += (c shr 16) and 0xFF; gg += (c shr 8) and 0xFF; bb += c and 0xFF
+        }
+        for (y in 0 until h) {
+            out[y * w + x] = ((a / span) shl 24) or ((rr / span) shl 16) or ((gg / span) shl 8) or (bb / span)
+            val co = tmp[(y - r).coerceIn(0, h - 1) * w + x]
+            val ci = tmp[(y + r + 1).coerceIn(0, h - 1) * w + x]
+            a += (ci ushr 24) - (co ushr 24)
+            rr += ((ci shr 16) and 0xFF) - ((co shr 16) and 0xFF)
+            gg += ((ci shr 8) and 0xFF) - ((co shr 8) and 0xFF)
+            bb += (ci and 0xFF) - (co and 0xFF)
+        }
+    }
+    return out
 }
 
 
