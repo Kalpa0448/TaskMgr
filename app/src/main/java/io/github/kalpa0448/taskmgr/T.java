@@ -291,6 +291,12 @@ public final class T {
         put("高对比度模式", "High contrast");
         put("在文字周围渲染阴影", "Render shadows around text");
         put("正在处理…", "Processing…");
+        put("选择图片", "Choose image");
+        put("更换图片", "Change image");
+        put("删除背景", "Remove background");
+        put("模糊强度", "Blur strength");
+        put("图片背景", "Background image");
+        put("先选择一张图片，以上选项才可调节。", "Choose an image first to unlock these options.");
         put("进程导出", "Process export");
         put("正在加载进程列表…", "Loading process list…");
         put("无法创建目标文件", "Cannot create target file");
