@@ -568,7 +568,12 @@ public final class ProcCollector {
                 if (r > 0 || t > 0) { rx = r; tx = t; }
             } catch (Throwable ignored) { }
 
-            if (rx == 0 && tx == 0) for (String line : readAll("/proc/net/dev")) {
+            java.util.List<String> nlines = readAll("/proc/net/dev");
+            if (nlines.isEmpty() && hasRoot()) {
+                nlines = new java.util.ArrayList<>();
+                for (String l : su("cat /proc/net/dev").split("\n")) nlines.add(l);
+            }
+            if (rx == 0 && tx == 0) for (String line : nlines) {
                 int i = line.indexOf(':');
                 if (i < 0) continue;
                 String name = line.substring(0, i).trim();
