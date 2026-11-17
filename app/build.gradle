@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 // 可选：在根目录放 keystore.properties 即可用正式签名，否则回落 debug 签名
@@ -12,6 +13,16 @@ if (keystorePropsFile.exists()) {
 android {
     compileSdkVersion 33
     buildToolsVersion '33.0.0'
+
+    buildFeatures {
+        compose true
+    }
+    composeOptions {
+        kotlinCompilerExtensionVersion '1.4.8'
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 
     defaultConfig {
         applicationId 'io.github.kalpa0448.taskmgr'
@@ -53,5 +64,14 @@ android {
 }
 
 dependencies {
+    def composeBom = platform('androidx.compose:compose-bom:2023.06.01')
+    implementation composeBom
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-graphics'
+    implementation 'androidx.compose.foundation:foundation'
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.activity:activity-compose:1.7.2'
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+
     // 无第三方依赖：UI 全部用系统控件 + 自绘
 }

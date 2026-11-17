@@ -27,6 +27,16 @@
         </activity>
 
         <activity
+            android:name=".compose.ComposeMainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".CropActivity"
             android:exported="false"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
