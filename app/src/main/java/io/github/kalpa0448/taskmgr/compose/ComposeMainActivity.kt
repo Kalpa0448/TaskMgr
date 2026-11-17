@@ -14,7 +14,8 @@ class ComposeMainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         val sp = getSharedPreferences("tm", MODE_PRIVATE)
-        val theme = ThemeState(sp)
+        val theme = ThemeState(sp, this)
+        theme.attach(this)
         theme.reload(this)
 
         setContent {

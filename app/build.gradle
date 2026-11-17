@@ -77,3 +77,11 @@ dependencies {
 
     // 无第三方依赖：UI 全部用系统控件 + 自绘
 }
+
+
+// 确保 release/debug 两个变体都跳过 Kotlin 元数据版本检查
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions {
+        freeCompilerArgs += ['-Xskip-metadata-version-check']
+    }
+}

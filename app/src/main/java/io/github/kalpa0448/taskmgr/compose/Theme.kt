@@ -12,17 +12,20 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import java.io.File
 
 /** 主题与背景配置（从 SharedPreferences 读取，和旧版设置共用同一份） */
-class ThemeState(val sp: SharedPreferences) {
+class ThemeState(val sp: SharedPreferences, private var ctx: android.content.Context? = null) {
 
     var accent by mutableStateOf(Color(0xFF4FC3F7))
     var dark by mutableStateOf(true)
     var bg by mutableStateOf<ImageBitmap?>(null)      // 清晰背景
     var bgBlur by mutableStateOf<ImageBitmap?>(null)  // 卡片取样用模糊背景
     var luma by mutableStateOf(0.35f)
-    var cardAlpha by mutableStateOf(0.55f)
-    var scrim by mutableStateOf(0.30f)
-    var blurLevel by mutableStateOf(5)
+    var cardAlpha by mutableStateOf(0.62f)
+    var scrim by mutableStateOf(0.25f)
+    var blurLevel by mutableStateOf(4)
     var bgSeed by mutableStateOf(true)
+    var sharpCache: Bitmap? = null                    // 清晰原图，改模糊强度时复用
+    var highContrast by mutableStateOf(false)
+    var frostPage by mutableStateOf(false)
     var winW by mutableStateOf(0)
     var winH by mutableStateOf(0)
 
@@ -36,7 +39,46 @@ class ThemeState(val sp: SharedPreferences) {
     var warnColor by mutableStateOf(Color(0xFFEF5350))
     var swapColor by mutableStateOf(Color(0xFFFFB74D))
 
+    fun attach(c: android.content.Context) { ctx = c.applicationContext }
+
+    fun applyBlurLevel(v: Int) {
+        sp.edit().putInt("blurLevel", v).apply()
+        blurLevel = v
+        ctx?.let { rebuildBlur(it) }
+    }
+
+    fun applyCardAlpha(v: Int) {
+        sp.edit().putInt("cardAlpha", v).apply()
+        cardAlpha = Math.max(10, Math.min(100, v)) / 100f
+    }
+
+    fun applyScrim(v: Int) {
+        sp.edit().putInt("scrim", v).apply()
+        scrim = Math.max(0, Math.min(100, v)) / 100f
+    }
+
+    fun applyFog(on: Boolean) {
+        sp.edit().putBoolean("bgBlur", on).apply()
+        ctx?.let { rebuildBlur(it) }
+    }
+
+    fun applySeed(on: Boolean) {
+        sp.edit().putBoolean("bgSeed", on).apply()
+        bgSeed = on
+        ctx?.let { reload(it) }
+    }
+
+    private fun rebuildBlur(c: android.content.Context) {
+        val f = File(c.filesDir, "bg.png")
+        if (!f.exists()) return
+        val raw = BitmapFactory.decodeFile(f.absolutePath) ?: return
+        bg = raw.asImageBitmap()
+        bgBlur = if (sp.getBoolean("bgBlur", true)) blur(raw, blurLevel)?.asImageBitmap() else null
+        luma = averageLuma(raw)
+    }
+
     fun reload(ctx: android.content.Context) {
+        this.ctx = ctx
         val themeMode = sp.getString("darkMode", "auto") ?: "auto"
         val sysDark = (ctx.resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
@@ -47,15 +89,18 @@ class ThemeState(val sp: SharedPreferences) {
             else -> sysDark
         }
 
-        blurLevel = sp.getInt("blurLevel", 5)
-        cardAlpha = Math.max(10, Math.min(100, sp.getInt("cardAlpha", 55))) / 100f
-        scrim = Math.max(0, Math.min(100, sp.getInt("scrim", 30))) / 100f
+        blurLevel = sp.getInt("blurLevel", 4)
+        cardAlpha = Math.max(10, Math.min(100, sp.getInt("cardAlpha", 62))) / 100f
+        scrim = Math.max(0, Math.min(100, sp.getInt("scrim", 25))) / 100f
         bgSeed = sp.getBoolean("bgSeed", true)
+        highContrast = sp.getBoolean("highContrast", false)
+        frostPage = sp.getBoolean("frostPage", false)
 
         val f = File(ctx.filesDir, "bg.png")
         if (f.exists()) {
             val raw = BitmapFactory.decodeFile(f.absolutePath)
             if (raw != null) {
+                sharpCache = raw
                 val fitted = raw
                 android.util.Log.d("TaskMgr", "bg decoded=${raw.width}x${raw.height} fitted=${fitted.width}x${fitted.height} screen=${ctx.resources.displayMetrics.widthPixels}x${ctx.resources.displayMetrics.heightPixels} density=${ctx.resources.displayMetrics.density}")
                 bg = fitted.asImageBitmap()
@@ -85,6 +130,60 @@ class ThemeState(val sp: SharedPreferences) {
         memColor = if (dark) Color(0xFF7FD48A) else Color(0xFF2E7D32)
         warnColor = if (dark) Color(0xFFEF6B6B) else Color(0xFFC62828)
         swapColor = if (dark) Color(0xFFFFB74D) else Color(0xFFEF6C00)
+    }
+
+    /** 改模糊强度：重算模糊图 */
+    fun updateBlur(v: Int) {
+        blurLevel = v.coerceIn(1, 10)
+        sp.edit().putInt("blurLevel", blurLevel).apply()
+        val src = sharpCache ?: return
+        bgBlur = blur(src, blurLevel)?.asImageBitmap()
+    }
+
+    fun updateCardAlpha(v: Int) {
+        cardAlpha = v.coerceIn(0, 100) / 100f
+        sp.edit().putInt("cardAlpha", v.coerceIn(0, 100)).apply()
+    }
+
+    fun updateScrim(v: Int) {
+        scrim = v.coerceIn(0, 100) / 100f
+        sp.edit().putInt("scrim", v.coerceIn(0, 100)).apply()
+    }
+
+    /** 当前明暗模式：auto / light / dark */
+    val darkMode: String get() = sp.getString("darkMode", "auto") ?: "auto"
+
+    /** 当前配色模式：default / monet */
+    val accentMode: String get() = sp.getString("accentMode", "default") ?: "default"
+
+    fun setThemeMode(mode: String) {
+        sp.edit().putString("darkMode", mode).apply()
+        ctx?.let { reload(it) }
+    }
+
+    fun setAccentMode(mode: String) {
+        sp.edit().putString("accentMode", mode).apply()
+        ctx?.let { reload(it) }
+    }
+
+    fun setSwitch(key: String, value: Boolean) {
+        sp.edit().putBoolean(key, value).apply()
+        when (key) {
+            "bgBlur" -> {
+                if (value) {
+                    val src = sharpCache
+                    if (src != null) bgBlur = blur(src, blurLevel)?.asImageBitmap()
+                } else bgBlur = null
+            }
+            "bgSeed" -> bgSeed = value
+            "highContrast" -> highContrast = value
+            "frostPage" -> frostPage = value
+        }
+    }
+
+    fun deleteBg() {
+        ctx?.let { File(it.filesDir, "bg.png").delete() }
+        bg = null; bgBlur = null; sharpCache = null
     }
 
     /** 卡片底色（带透明度） */

@@ -16,12 +16,7 @@
         android:usesCleartextTraffic="false"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <!-- 旧版界面，保留用于过渡，不再暴露启动图标 -->
-        <activity
-            android:name=".MainActivity"
-            android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden" />
-
+        <!-- 唯一入口：Compose 版界面 -->
         <activity
             android:name=".compose.ComposeMainActivity"
             android:exported="true"
@@ -32,6 +27,13 @@
             </intent-filter>
         </activity>
 
+        <!-- 旧版界面：保留代码，不再出现在桌面 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!-- 裁切页：由 App 内部启动 -->
         <activity
             android:name=".CropActivity"
             android:exported="false"

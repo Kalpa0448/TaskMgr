@@ -216,6 +216,8 @@ public class MainActivity extends Activity {
 
     private void applyTheme() {
         boolean dark = isDarkMode();
+        // 有背景图时：配色跟随壁纸亮度，保证文字始终清晰
+        if (bgSharp != null) dark = backdropIsDark();
 
         int accent = 0;
         if (sp.getBoolean("bgSeed", true) && bgAccent != 0) {
@@ -255,7 +257,7 @@ public class MainActivity extends Activity {
         // 设了自定义背景图 → 卡片半透明
         if (hasBg()) {
             // 卡片不透明度：参考实现默认 55%
-            int pct = Math.max(10, Math.min(100, sp.getInt("cardAlpha", 55)));
+            int pct = Math.max(10, Math.min(100, sp.getInt("cardAlpha", 45)));
             int a = pct * 255 / 100;
             C_CARD = withAlpha(blend(C_CARD, dark ? 0xFF000000 : 0xFFFFFFFF, 0.0f), a);
             C_CARD2 = withAlpha(C_CARD2, Math.min(0xFF, a + 0x1E));
@@ -1402,13 +1404,13 @@ public class MainActivity extends Activity {
 
     /** 强度 1~10：数字越大越糊 */
     private Bitmap blur(Bitmap src) {
-        return blur(src, Math.max(1, Math.min(10, sp.getInt("blurLevel", 5))));
+        return blur(src, Math.max(1, Math.min(10, sp.getInt("blurLevel", 3))));
     }
 
     private Bitmap blur(Bitmap src, int level) {
         try {
-            int div = 6 + level * 4;        // 1→10  10→46（越大越糊）
-            int passes = 1 + level / 3;     // 1→1   10→4
+            int div = 4 + level * 3;        // 1→7   10→34（越大越糊，但都不过分）
+            int passes = 1 + level / 4;     // 1→1   10→3
             int w = Math.max(12, src.getWidth() / div);
             int h = Math.max(12, src.getHeight() / div);
             Bitmap small = Bitmap.createScaledBitmap(src, w, h, true);
@@ -1577,8 +1579,8 @@ public class MainActivity extends Activity {
         switchRow(T.s("启用模糊"), T.s("对背景做模糊处理"), "bgBlur", true, null, on);
         switchRow(T.s("整页模糊"), T.s("开：整页背景都模糊；关：只有卡片区域模糊"),
                 "frostPage", false, null, on);
-        inlineLevel(T.s("模糊强度"), "blurLevel", 5, on);
-        inlineSlider(T.s("卡片不透明度"), "cardAlpha", 55, on);
+        inlineLevel(T.s("模糊强度"), "blurLevel", 3, on);
+        inlineSlider(T.s("卡片不透明度"), "cardAlpha", 45, on);
         inlineSlider(T.s("背景暗度调节"), "scrim", 30, on);
         switchRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null, on);
         switchRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null, on);
