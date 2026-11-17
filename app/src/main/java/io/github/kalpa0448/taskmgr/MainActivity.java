@@ -88,6 +88,8 @@ public class MainActivity extends Activity {
     private Bitmap bgBlurred;   // 模糊版（供卡片取样）
     private int bgAccent;       // 从背景图提取的强调色
     private float bgLuma = 0.5f; // 背景图平均亮度 0~1
+    private TextView tvDisk, tvDiskSub, tvNet, tvNetSub;
+    private Sparkline sparkDisk, sparkNet;
     private boolean bgPage;     // 是否处于「图片背景」二级页
     private long lastBgStamp = -2;   // 背景文件最后修改时间，用于检测变化
     private Bitmap blurredBg;   // 卡片毛玻璃用的整屏模糊图
@@ -490,6 +492,42 @@ public class MainActivity extends Activity {
         tvSwap.setPadding(0, dp(4), 0, 0);
         memCard.addView(tvSwap);
         box.addView(memCard, lp(-1, -2, 0, 0, 0, dp(12)));
+
+        // ---- 磁盘 ----
+        LinearLayout diskCard = card();
+        tvDisk = new TextView(this);
+        tvDisk.setText("—");
+        tvDisk.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        tvDisk.setTypeface(Typeface.DEFAULT_BOLD);
+        tvDisk.setTextColor(C_CPU);
+        diskCard.addView(tvDisk);
+        sparkDisk = new Sparkline(this, C_CPU, CAPACITY);
+        diskCard.addView(sparkDisk, lp(-1, dp(40), 0, dp(8), 0, 0));
+        tvDiskSub = new TextView(this);
+        tvDiskSub.setText("—");
+        tvDiskSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        tvDiskSub.setTextColor(C_SUB);
+        tvDiskSub.setPadding(0, dp(4), 0, 0);
+        diskCard.addView(tvDiskSub);
+        box.addView(diskCard, lp(-1, -2, 0, 0, 0, dp(12)));
+
+        // ---- 网络 ----
+        LinearLayout netCard = card();
+        tvNet = new TextView(this);
+        tvNet.setText("—");
+        tvNet.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        tvNet.setTypeface(Typeface.DEFAULT_BOLD);
+        tvNet.setTextColor(C_MEM);
+        netCard.addView(tvNet);
+        sparkNet = new Sparkline(this, C_MEM, CAPACITY);
+        netCard.addView(sparkNet, lp(-1, dp(40), 0, dp(8), 0, 0));
+        tvNetSub = new TextView(this);
+        tvNetSub.setText("—");
+        tvNetSub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        tvNetSub.setTextColor(C_SUB);
+        tvNetSub.setPadding(0, dp(4), 0, 0);
+        netCard.addView(tvNetSub);
+        box.addView(netCard, lp(-1, -2, 0, 0, 0, dp(12)));
 
         box.addView(buildDeviceCard(), lp(-1, -2, 0, 0, 0, 0));
 
@@ -1988,6 +2026,18 @@ public class MainActivity extends Activity {
 
     private interface IntConsumer { void accept(int i); }
 
+    /** 速率 → 0~100 的曲线高度（对数刻度，1 KB/s≈33，1 MB/s=100） */
+    private static float normRate(double bps) {
+        if (bps <= 0) return 0f;
+        return (float) Math.min(100.0, 100.0 * Math.log10(1 + bps / 1024.0) / Math.log10(1025));
+    }
+
+    private static String rate(double bps) {
+        if (bps < 1024) return String.format(Locale.ROOT, "%.0f B/s", bps);
+        if (bps < 1024 * 1024) return String.format(Locale.ROOT, "%.1f KB/s", bps / 1024);
+        return String.format(Locale.ROOT, "%.1f MB/s", bps / 1048576);
+    }
+
     private String intervalLabel() {
         if (intervalMs == 1000) return T.s("1 秒");
         if (intervalMs == 1500) return T.s("1.5 秒");
@@ -2008,13 +2058,15 @@ public class MainActivity extends Activity {
 
     private void startLoop() {
         new Thread(() -> {
+            long next = System.currentTimeMillis();
             while (running) {
-                long t0 = System.currentTimeMillis();
                 ProcCollector.Snapshot s = ProcCollector.collect();
                 ui.post(() -> render(s));
-                long cost = System.currentTimeMillis() - t0;
+                next += intervalMs;
+                long wait = next - System.currentTimeMillis();
+                if (wait < 0) { next = System.currentTimeMillis(); wait = 0; }
                 try {
-                    Thread.sleep(Math.max(200, intervalMs - cost));
+                    if (wait > 0) Thread.sleep(wait);
                 } catch (InterruptedException e) { return; }
             }
         }, "collector").start();
@@ -2024,6 +2076,19 @@ public class MainActivity extends Activity {
         if (s == null) return;
         if (bgPage || pageMonitor == null) { last = s; return; }   // 二级页没有这些视图
         last = s;
+        if (tvDisk != null) {
+            tvDisk.setText("读 " + rate(s.diskReadBps) + "   ·   写 " + rate(s.diskWriteBps));
+            long usedPct = s.diskTotal > 0 ? s.diskUsed * 100 / s.diskTotal : 0;
+            tvDiskSub.setText(String.format(Locale.ROOT,
+                    "存储 %.1f / %.1f GB  ·  已用 %d%%",
+                    s.diskUsed / 1073741824.0, s.diskTotal / 1073741824.0, usedPct));
+            tvNet.setText("↓ " + rate(s.netRxBps) + "   ·   ↑ " + rate(s.netTxBps));
+            tvNetSub.setText(String.format(Locale.ROOT,
+                    "累计 ↓ %.2f GB  ·  ↑ %.2f GB",
+                    s.netRxTotal / 1073741824.0, s.netTxTotal / 1073741824.0));
+            if (sparkDisk != null) sparkDisk.push(normRate(s.diskReadBps + s.diskWriteBps));
+            if (sparkNet != null) sparkNet.push(normRate(s.netRxBps + s.netTxBps));
+        }
         ProcCollector.MemInfo m = s.mem;
         double memPct = m.memTotal > 0 ? m.used() * 100.0 / m.memTotal : 0;
 
@@ -2341,6 +2406,19 @@ public class MainActivity extends Activity {
     private void showMemDetail() {
         ProcCollector.Snapshot s = last;
         if (s == null) return;
+        if (tvDisk != null) {
+            tvDisk.setText("读 " + rate(s.diskReadBps) + "   ·   写 " + rate(s.diskWriteBps));
+            long usedPct = s.diskTotal > 0 ? s.diskUsed * 100 / s.diskTotal : 0;
+            tvDiskSub.setText(String.format(Locale.ROOT,
+                    "存储 %.1f / %.1f GB  ·  已用 %d%%",
+                    s.diskUsed / 1073741824.0, s.diskTotal / 1073741824.0, usedPct));
+            tvNet.setText("↓ " + rate(s.netRxBps) + "   ·   ↑ " + rate(s.netTxBps));
+            tvNetSub.setText(String.format(Locale.ROOT,
+                    "累计 ↓ %.2f GB  ·  ↑ %.2f GB",
+                    s.netRxTotal / 1073741824.0, s.netTxTotal / 1073741824.0));
+            if (sparkDisk != null) sparkDisk.push(normRate(s.diskReadBps + s.diskWriteBps));
+            if (sparkNet != null) sparkNet.push(normRate(s.netRxBps + s.netTxBps));
+        }
         ProcCollector.MemInfo m = s.mem;
         StringBuilder sb = new StringBuilder();
         sb.append(T.s("【物理内存】\n"));

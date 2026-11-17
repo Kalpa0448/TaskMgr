@@ -83,6 +83,8 @@ public final class ProcCollector {
         public double uptime;
         public int procCount;
         public List<Proc> procs = new ArrayList<>();
+        public double diskReadBps, diskWriteBps, netRxBps, netTxBps;
+        public long diskUsed, diskTotal, netRxTotal, netTxTotal;
     }
 
     private static final int PAGE = 4096, HZ = 100;
@@ -435,6 +437,7 @@ public final class ProcCollector {
         }
         if (s.complete && !s.loading && s.procs.size() > 5) lastGood = new ArrayList<>(s.procs);
         resolveArch(s);
+        fillIo(s);
         return s;
     }
 
@@ -531,6 +534,65 @@ public final class ProcCollector {
     }
 
     /** uid → 可读用户名 */
+    // ---- 磁盘 / 网络 速率采样 ----
+    private static long ioLastT = 0, ioLastRead = -1, ioLastWrite = -1, ioLastRx = -1, ioLastTx = -1;
+
+    /** 读取 /proc/diskstats 与 /proc/net/dev 的累计值，算出速率填进 Snapshot */
+    public static void fillIo(Snapshot s) {
+        try {
+            long readSec = 0, writeSec = 0;
+            for (String line : readAll("/proc/diskstats")) {
+                String[] f = line.trim().split("\\s+");
+                if (f.length < 10) continue;
+                String dev = f[2];
+                // 只统计主存储设备，避免分区重复计数
+                if (!(dev.equals("sda") || dev.equals("sdb") || dev.equals("mmcblk0")
+                        || dev.equals("vda") || dev.equals("nvme0n1"))) continue;
+                try {
+                    readSec += Long.parseLong(f[5]);
+                    writeSec += Long.parseLong(f[9]);
+                } catch (NumberFormatException ignored) { }
+            }
+            long rx = 0, tx = 0;
+            for (String line : readAll("/proc/net/dev")) {
+                int i = line.indexOf(':');
+                if (i < 0) continue;
+                String name = line.substring(0, i).trim();
+                if (name.equals("lo") || name.startsWith("ifb")) continue;
+                String[] g = line.substring(i + 1).trim().split("\\s+");
+                if (g.length < 9) continue;
+                try {
+                    rx += Long.parseLong(g[0]);
+                    tx += Long.parseLong(g[8]);
+                } catch (NumberFormatException ignored) { }
+            }
+            long now = System.currentTimeMillis();
+            if (ioLastT > 0 && now > ioLastT) {
+                double dt = (now - ioLastT) / 1000.0;
+                s.diskReadBps = Math.max(0, (readSec - ioLastRead) * 512.0 / dt);
+                s.diskWriteBps = Math.max(0, (writeSec - ioLastWrite) * 512.0 / dt);
+                s.netRxBps = Math.max(0, (rx - ioLastRx) / dt);
+                s.netTxBps = Math.max(0, (tx - ioLastTx) / dt);
+            }
+            ioLastT = now; ioLastRead = readSec; ioLastWrite = writeSec;
+            ioLastRx = rx; ioLastTx = tx;
+            s.netRxTotal = rx; s.netTxTotal = tx;
+
+            android.os.StatFs sf = new android.os.StatFs("/data");
+            s.diskTotal = sf.getTotalBytes();
+            s.diskUsed = s.diskTotal - sf.getAvailableBytes();
+        } catch (Throwable ignored) { }
+    }
+
+    private static java.util.List<String> readAll(String path) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(path))) {
+            String l;
+            while ((l = br.readLine()) != null) out.add(l);
+        } catch (Throwable ignored) { }
+        return out;
+    }
+
     public static String userName(int uid) {
         if (uid == 0) return "root";
         if (uid == 1000) return "system";
