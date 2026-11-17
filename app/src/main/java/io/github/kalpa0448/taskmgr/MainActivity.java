@@ -1321,12 +1321,15 @@ public class MainActivity extends Activity {
 
     private void applyBackground() {
         ScrollView[] pages = {pageMonitor, pageProcess, pageDetails, pageSettings};
-        for (ScrollView v : pages) {
-            if (v instanceof FrostScrollView) ((FrostScrollView) v).setBackdrop(bgBlurred);
+        boolean frost = (bgBlurred != null);
+        if (frost) {
+            for (FrostScrollView p : new FrostScrollView[]{pageMonitor, pageProcess, pageDetails, pageSettings}) {
+                if (p != null) p.setFrostBackdrop(bgBlurred);
+            }
         }
         if (bgSharp == null) {
             getWindow().setBackgroundDrawable(new ColorDrawable(C_BG));
-            for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
+            if (!frost) for (ScrollView v : pages) if (v != null) v.setBackgroundColor(C_BG);
             return;
         }
         BitmapDrawable bd = new BitmapDrawable(getResources(), bgSharp);
@@ -1336,7 +1339,7 @@ public class MainActivity extends Activity {
                 ? bd
                 : new LayerDrawable(new Drawable[]{bd, new ColorDrawable(scrim)});
         getWindow().setBackgroundDrawable(bg);
-        for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
+        if (!frost) for (ScrollView v : pages) if (v != null) v.setBackgroundColor(0x00000000);
     }
 
     /** 蒙版浓度 0~90% → 黑色 alpha */

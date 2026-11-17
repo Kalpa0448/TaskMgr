@@ -4,106 +4,119 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
+import android.graphics.ColorFilter;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.util.AttributeSet;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ScrollView;
 
 /**
  * 带「卡片毛玻璃」的滚动容器。
  *
- * 关键点：
- * 1. 在 dispatchDraw 里、子视图之前绘制，随滚动帧同步重绘，不存在缓存延迟；
- * 2. 用 BitmapShader + drawRoundRect 画，不用 clipPath，避免硬件加速下出现条纹；
- * 3. 用 offsetDescendantRectToMyCoords 换算卡片位置，自动带上滚动偏移。
+ * 关键：毛玻璃画在**背景层**里。
+ * View 的绘制顺序是「先画背景（视口坐标，不随滚动移动）→ 再平移画布画内容」，
+ * 所以放在背景层里的模糊图天然固定在屏幕上，卡片滚过时只是透过不同区域看它。
+ *
+ * 之前放在 dispatchDraw 里是错的：那时画布已经被平移了 -scrollY，
+ * 结果模糊跟着内容一起滚。
  */
 public class FrostScrollView extends ScrollView {
 
-    /** 标记：这个 View 是卡片，需要铺毛玻璃（值为圆角半径 px） */
+    /** 标记：这个 View 是卡片，值为圆角半径(px) */
     public static final int TAG_FROST = 0x0F050001;
 
-    private Bitmap backdrop;
-    private BitmapShader shader;
-    private final Matrix shaderMatrix = new Matrix();
-    private final Paint frostPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Rect tmp = new Rect();
-    private final RectF cardRect = new RectF();
-    private final int[] loc = new int[2];
-    private int winX, winY;      // 本容器在窗口中的位置（滚动时不变，缓存下来避免滞后）
+    private FrostBg frostBg;
 
     public FrostScrollView(Context c) {
         super(c);
-        frostPaint.setFilterBitmap(true);
-        frostPaint.setDither(true);
     }
 
     public FrostScrollView(Context c, AttributeSet a) {
         super(c, a);
-        frostPaint.setFilterBitmap(true);
-        frostPaint.setDither(true);
+    }
+
+    /** 传入整屏模糊图；传 null 表示关闭 */
+    public void setFrostBackdrop(Bitmap bm) {
+        if (bm == null) {
+            if (frostBg != null) {
+                frostBg = null;
+                setBackground(null);
+            }
+            return;
+        }
+        frostBg = new FrostBg(this, bm);
+        setBackground(frostBg);
     }
 
     @Override
-    protected void onLayout(boolean changed, int l, int t, int r, int b) {
-        super.onLayout(changed, l, t, r, b);
-        getLocationInWindow(loc);
-        winX = loc[0];
-        winY = loc[1];
+    protected void onScrollChanged(int l, int t, int oldl, int oldt) {
+        super.onScrollChanged(l, t, oldl, oldt);
+        // 滚动时卡片位置变化，需要重画背景层
+        if (frostBg != null) invalidate();
     }
 
-    @Override
-    protected void onAttachedToWindow() {
-        super.onAttachedToWindow();
-        getLocationInWindow(loc);
-        winX = loc[0];
-        winY = loc[1];
-    }
+    /** 只负责「把模糊图铺在卡片矩形上」的背景 */
+    private static class FrostBg extends Drawable {
 
-    public void setBackdrop(Bitmap bm) {
-        backdrop = bm;
-        shader = (bm == null) ? null : new BitmapShader(bm, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
-        frostPaint.setShader(shader);
-        invalidate();
-    }
+        private final FrostScrollView host;
+        private final Bitmap backdrop;
+        private final BitmapShader shader;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+        private final Matrix matrix = new Matrix();
+        private final RectF rect = new RectF();
+        private final Rect node = new Rect();
+        private final int[] loc = new int[2];
 
-    @Override
-    protected void dispatchDraw(Canvas canvas) {
-        if (backdrop != null && shader != null) {
-            // 位图与窗口对齐：用缓存的窗口位置，避免滚动时取到上一帧的值
-            shaderMatrix.setTranslate(-winX, -winY);
-            shader.setLocalMatrix(shaderMatrix);
+        FrostBg(FrostScrollView host, Bitmap bm) {
+            this.host = host;
+            this.backdrop = bm;
+            this.shader = new BitmapShader(bm, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+            paint.setShader(shader);
+            paint.setDither(true);
+        }
 
-            View content = getChildAt(0);
+        @Override
+        public void draw(Canvas canvas) {
+            // 背景层画布没有滚动偏移，直接用视口坐标即可
+            host.getLocationInWindow(loc);
+            matrix.setTranslate(-loc[0], -loc[1]);
+            shader.setLocalMatrix(matrix);
+
+            View content = host.getChildAt(0);
             if (content != null) drawCards(canvas, content);
         }
-        super.dispatchDraw(canvas);
-    }
 
-    private void drawCards(Canvas canvas, View v) {
-        if (v.getVisibility() != View.VISIBLE) return;
+        private void drawCards(Canvas canvas, View v) {
+            if (v.getVisibility() != View.VISIBLE) return;
 
-        Object tag = v.getTag(TAG_FROST);
-        if (tag instanceof Float && v.getWidth() > 0 && v.getHeight() > 0) {
-            // 用系统方法换算到本容器坐标（自带滚动偏移）
-            tmp.set(0, 0, v.getWidth(), v.getHeight());
-            try {
-                offsetDescendantRectToMyCoords(v, tmp);
-            } catch (Throwable ignored) {
-                return;
+            Object tag = v.getTag(TAG_FROST);
+            if (tag instanceof Float && v.getWidth() > 0 && v.getHeight() > 0) {
+                node.set(0, 0, v.getWidth(), v.getHeight());
+                host.offsetDescendantRectToMyCoords(v, node);
+                node.offset(0, host.getScrollY());   // 背景画布带滚动偏移，这里补回来
+                if (node.bottom > 0 && node.top < host.getHeight()
+                        && node.right > 0 && node.left < host.getWidth()) {
+                    rect.set(node);
+                    float r = (Float) tag;
+                    canvas.drawRoundRect(rect, r, r, paint);
+                }
             }
-            if (tmp.bottom > 0 && tmp.top < getHeight()) {
-                cardRect.set(tmp);
-                canvas.drawRoundRect(cardRect, (Float) tag, (Float) tag, frostPaint);
+
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                for (int i = 0; i < g.getChildCount(); i++) drawCards(canvas, g.getChildAt(i));
             }
         }
 
-        if (v instanceof android.view.ViewGroup) {
-            android.view.ViewGroup g = (android.view.ViewGroup) v;
-            for (int i = 0; i < g.getChildCount(); i++) drawCards(canvas, g.getChildAt(i));
-        }
+        @Override public void setAlpha(int alpha) { }
+        @Override public void setColorFilter(ColorFilter cf) { }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 }
