@@ -1050,8 +1050,8 @@ public class MainActivity extends Activity {
             });
         });
 
-        settingRowRaw(T.s("自定义背景"), T.s("选择一张图片作为应用背景"),
-                bgFile().exists() ? T.s("已设置") : T.s("未设置"), () -> {
+        switchRowAction(T.s("自定义背景"), T.s("选择一张图片作为应用背景"),
+                "bgOn", true, () -> {
                     if (!bgFile().exists()) {
                         pickBackground();
                         return;
@@ -1081,17 +1081,15 @@ public class MainActivity extends Activity {
             });
         }
 
-        toggleRow(T.s("启用模糊"), T.s("对背景图做高斯模糊"), "bgBlur", true, null, null);
+        switchRow(T.s("启用模糊"), T.s("对背景图做高斯模糊"), "bgBlur", true, null);
 
-        sliderRow(T.s("卡片不透明度"), "cardAlpha", 55,
-                T.s("卡片越不透明，文字越清晰"));
+        inlineSlider(T.s("卡片不透明度"), "cardAlpha", 55);
 
-        sliderRow(T.s("背景暗度调节"), "scrim", 30,
-                T.s("数值越大，背景越暗"));
+        inlineSlider(T.s("背景暗度调节"), "scrim", 30);
 
-        toggleRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null, null);
+        switchRow(T.s("从背景图取色"), T.s("从背景图提取主题强调色"), "bgSeed", true, null);
 
-        toggleRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null, null);
+        switchRow(T.s("高对比度模式"), T.s("在文字周围渲染阴影"), "highContrast", false, null);
 
         settingRow(T.s("恢复默认背景"), "", () -> {
             File f = bgFile();
@@ -1559,6 +1557,124 @@ public class MainActivity extends Activity {
         }
         tv.setPadding(dp(6), dp(14), dp(6), dp(6));
         settingsBox.addView(tv);
+    }
+
+    /** 右侧是开关的设置项 */
+    private void switchRow(String title, String sub, String key, boolean def, Runnable onChange) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(11), dp(12), dp(11));
+        applyCardBg(row, dp(11), C_CARD);
+
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(C_TEXT);
+        left.addView(t);
+        if (sub != null && !sub.isEmpty()) {
+            TextView st = new TextView(this);
+            st.setText(sub);
+            st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            st.setTextColor(C_SUB);
+            st.setPadding(0, dp(2), 0, 0);
+            left.addView(st);
+        }
+        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        android.widget.Switch sw = new android.widget.Switch(this);
+        sw.setChecked(sp.getBoolean(key, def));
+        sw.setShowText(false);
+        sw.setPadding(0, 0, 0, 0);
+        sw.setOnCheckedChangeListener((cb, checked) -> {
+            sp.edit().putBoolean(key, checked).apply();
+            recreate();
+        });
+        row.addView(sw, new LinearLayout.LayoutParams(-2, -2));
+
+        settingsBox.addView(row, lp(-1, -2, 0, 0, 0, dp(6)));
+    }
+
+    /** 开关行，但整行可点（用于「自定义背景」） */
+    private void switchRowAction(String title, String sub, String key, boolean def, Runnable onRowClick) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(11), dp(12), dp(11));
+        applyCardBg(row, dp(11), C_CARD);
+
+        LinearLayout left = new LinearLayout(this);
+        left.setOrientation(LinearLayout.VERTICAL);
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(C_TEXT);
+        left.addView(t);
+        if (sub != null && !sub.isEmpty()) {
+            TextView st = new TextView(this);
+            st.setText(sub);
+            st.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            st.setTextColor(C_SUB);
+            st.setPadding(0, dp(2), 0, 0);
+            left.addView(st);
+        }
+        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        android.widget.Switch sw = new android.widget.Switch(this);
+        sw.setChecked(sp.getBoolean(key, def));
+        sw.setShowText(false);
+        sw.setOnCheckedChangeListener((cb, checked) -> {
+            sp.edit().putBoolean(key, checked).apply();
+            recreate();
+        });
+        row.addView(sw, new LinearLayout.LayoutParams(-2, -2));
+
+        row.setOnClickListener(v -> onRowClick.run());
+        settingsBox.addView(row, lp(-1, -2, 0, 0, 0, dp(6)));
+    }
+
+    /** 内联滑杆（标题 + 数值 + 拖动条） */
+    private void inlineSlider(String title, String key, int def) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(12), dp(14), dp(8));
+        applyCardBg(card, dp(11), C_CARD);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        t.setTextColor(C_TEXT);
+        head.addView(t, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        TextView val = new TextView(this);
+        val.setText(sp.getInt(key, def) + "%");
+        val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        val.setTextColor(C_CPU);
+        head.addView(val);
+        card.addView(head);
+
+        SeekBar sb = new SeekBar(this);
+        sb.setMax(100);
+        sb.setProgress(sp.getInt(key, def));
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s2, int p, boolean fromUser) {
+                val.setText(p + "%");
+            }
+            @Override public void onStartTrackingTouch(SeekBar s2) { }
+            @Override public void onStopTrackingTouch(SeekBar s2) {
+                sp.edit().putInt(key, s2.getProgress()).apply();
+                recreate();
+            }
+        });
+        card.addView(sb);
+
+        settingsBox.addView(card, lp(-1, -2, 0, 0, 0, dp(6)));
     }
 
     /** 带副标题的设置项 */
